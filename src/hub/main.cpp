@@ -23,7 +23,7 @@ static void onDataNotify(NimBLERemoteCharacteristic* c,
             if (len < sizeof(NodeInfo)) break;
             auto* ni = reinterpret_cast<NodeInfo*>(data);
             const char* typeName = (ni->node_type == NodeType::SENSOR) ? "sensor" : "ir";
-            Serial.printf(">> NodeInfo: type=%s id=%u bat=%umV fw=%u.%u\n",
+            USBSerial.printf(">> NodeInfo: type=%s id=%u bat=%umV fw=%u.%u\n",
                           typeName, ni->node_id, ni->battery_mv,
                           ni->fw_major, ni->fw_minor);
             break;
@@ -31,19 +31,19 @@ static void onDataNotify(NimBLERemoteCharacteristic* c,
         case MsgType::SENSOR_DATA: {
             if (len < sizeof(SensorData)) break;
             auto* sd = reinterpret_cast<SensorData*>(data);
-            Serial.printf(">> sensor: %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
+            USBSerial.printf(">> sensor: %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
                           sd->temp, sd->humidity, sd->ldr, sd->battery_mv);
             break;
         }
         default:
-            Serial.printf(">> unknown: 0x%02x (%u bytes)\n", data[0], len);
+            USBSerial.printf(">> unknown: 0x%02x (%u bytes)\n", data[0], len);
     }
 }
 
 class ScanCB : public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice* dev) override {
         if (dev->isAdvertisingService(NimBLEUUID(TEMPIO_SERVICE_UUID))) {
-            Serial.printf("found: %s  rssi=%d\n",
+            USBSerial.printf("found: %s  rssi=%d\n",
                           dev->getAddress().toString().c_str(), dev->getRSSI());
             NimBLEDevice::getScan()->stop();
             targetAddr = dev->getAddress();
@@ -54,14 +54,14 @@ class ScanCB : public NimBLEScanCallbacks {
 
 class ClientCB : public NimBLEClientCallbacks {
     void onConnect(NimBLEClient* c) override {
-        Serial.println("connected");
+        USBSerial.println("connected");
     }
 
     void onDisconnect(NimBLEClient* c, int reason) override {
         connected = false;
         pConfigChar = nullptr;
         digitalWrite(LED_PIN, HIGH);
-        Serial.printf("disconnected (reason=%d) — restarting scan\n", reason);
+        USBSerial.printf("disconnected (reason=%d) — restarting scan\n", reason);
         NimBLEDevice::getScan()->start(0, false);
     }
 };
@@ -71,13 +71,13 @@ bool connectToServer() {
     pClient->setClientCallbacks(new ClientCB());
 
     if (!pClient->connect(targetAddr)) {
-        Serial.println("connect failed");
+        USBSerial.println("connect failed");
         return false;
     }
 
     auto* pService = pClient->getService(TEMPIO_SERVICE_UUID);
     if (!pService) {
-        Serial.println("service not found");
+        USBSerial.println("service not found");
         pClient->disconnect();
         return false;
     }
@@ -85,7 +85,7 @@ bool connectToServer() {
     auto* pDataChar = pService->getCharacteristic(TEMPIO_CHAR_DATA_UUID);
     if (pDataChar && pDataChar->canNotify()) {
         pDataChar->subscribe(true, onDataNotify);
-        Serial.println("subscribed to DATA");
+        USBSerial.println("subscribed to DATA");
     }
 
     pConfigChar = pService->getCharacteristic(TEMPIO_CHAR_CONFIG_UUID);
@@ -107,11 +107,11 @@ void startScan() {
     pScan->setInterval(100);
     pScan->setWindow(99);
     pScan->start(0, false);
-    Serial.println("scanning...");
+    USBSerial.println("scanning...");
 }
 
 void setup() {
-    Serial.begin(115200);
+    USBSerial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, HIGH);
 
@@ -119,7 +119,7 @@ void setup() {
     NimBLEDevice::setMTU(512);
 
     startScan();
-    Serial.println("hub central ready");
+    USBSerial.println("hub central ready");
 }
 
 void loop() {
@@ -130,7 +130,7 @@ void loop() {
             AssignId cmd;
             cmd.node_id = 1;
             sendCommand(&cmd, sizeof(cmd));
-            Serial.println("<< ASSIGN_ID: 1");
+            USBSerial.println("<< ASSIGN_ID: 1");
         } else {
             startScan();
         }
