@@ -11,7 +11,7 @@ static NimBLEClient* pClient = nullptr;
 static NimBLERemoteCharacteristic* pConfigChar = nullptr;
 static bool connected = false;
 static bool doConnect = false;
-static NimBLEAdvertisedDevice* targetDevice = nullptr;
+static NimBLEAddress targetAddr;
 
 static void onDataNotify(NimBLERemoteCharacteristic* c,
                          uint8_t* data, size_t len, bool isNotify) {
@@ -40,13 +40,13 @@ static void onDataNotify(NimBLERemoteCharacteristic* c,
     }
 }
 
-class ScanCB : public NimBLEAdvertisedDeviceCallbacks {
-    void onResult(NimBLEAdvertisedDevice* dev) override {
+class ScanCB : public NimBLEScanCallbacks {
+    void onResult(const NimBLEAdvertisedDevice* dev) override {
         if (dev->isAdvertisingService(NimBLEUUID(TEMPIO_SERVICE_UUID))) {
             Serial.printf("found: %s  rssi=%d\n",
                           dev->getAddress().toString().c_str(), dev->getRSSI());
             NimBLEDevice::getScan()->stop();
-            targetDevice = dev;
+            targetAddr = dev->getAddress();
             doConnect = true;
         }
     }
@@ -68,9 +68,9 @@ class ClientCB : public NimBLEClientCallbacks {
 
 bool connectToServer() {
     pClient = NimBLEDevice::createClient();
-    pClient->setCallbacks(new ClientCB());
+    pClient->setClientCallbacks(new ClientCB());
 
-    if (!pClient->connect(targetDevice)) {
+    if (!pClient->connect(targetAddr)) {
         Serial.println("connect failed");
         return false;
     }
@@ -102,7 +102,7 @@ void sendCommand(const void* data, size_t len) {
 
 void startScan() {
     auto* pScan = NimBLEDevice::getScan();
-    pScan->setAdvertisedDeviceCallbacks(new ScanCB());
+    pScan->setScanCallbacks(new ScanCB());
     pScan->setActiveScan(true);
     pScan->setInterval(100);
     pScan->setWindow(99);
