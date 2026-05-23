@@ -11,9 +11,8 @@ void setup() {
     // 시리얼 통신 시작. 115200 = 초당 115200비트 속도 (baud rate)
     // PC의 시리얼 모니터도 같은 속도로 맞춰야 글자가 깨지지 않음
     Serial.begin(115200);
-    // Serial이 준비될 때까지 기다림. USB CDC는 PC가 포트를 열어야 준비 완료됨.
-    // 준비 안 됐으면 10ms씩 쉬면서 계속 확인
-    while (!Serial) { delay(10); }
+    // Serial이 준비될 때까지 최대 3초 대기. USB 안 꽂은 독립 구동 시 무한 대기 방지
+    while (!Serial && millis() < 6000) { delay(10); }
 
     // BLE Central 모드 초기화 — 스캔 시작, 콜백 등록 등
     ble_central_init();

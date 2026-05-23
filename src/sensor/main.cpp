@@ -10,8 +10,8 @@ void setup() {
     delay(3000);
     // 시리얼 통신 시작. 115200 = 초당 115200비트 속도 (baud rate)
     Serial.begin(115200);
-    // Serial이 준비될 때까지 기다림. USB CDC는 PC가 포트를 열어야 준비 완료됨.
-    while (!Serial) { delay(10); }
+    // Serial이 준비될 때까지 최대 3초 대기. 건전지 구동 시 무한 대기 방지
+    while (!Serial && millis() < 6000) { delay(10); }
 
     // BLE Peripheral 모드 초기화 — 서비스/특성 생성, 광고 시작 등
     ble_peripheral_init();
