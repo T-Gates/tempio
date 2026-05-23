@@ -14,21 +14,10 @@ ESP32-C3 2대로 BLE Central↔Peripheral 연결 확인. 하드웨어 센서 없
 
 검증: 시리얼 모니터 2개 열어서 양쪽 로그 확인 ✅
 
-## Phase 2 — 센서노드 기본
-
-센서노드 보드(ESP32-C3)에 DHT22 연결, BLE로 허브에 전송. (프로덕션은 SHT40으로 교체)
-
-- [ ] DHT22 연결 + 온습도 읽기
-- [ ] LDR ADC 읽기 (GPIO2)
-- [ ] BLE Peripheral로 실제 센서값 전송 (Phase 1 코드 확장)
-- [ ] 배터리 전압 ADC 읽기
-
-검증: Central 쪽 시리얼에서 실제 온습도·조도 값 수신 확인
-
-## Phase 3 — 딥슬립
+## Phase 2 — 딥슬립
 
 센서노드에 딥슬립 적용. 배터리 구동 준비.
-딥슬립이 연결 패턴을 근본적으로 바꾸기 때문에 다중 연결보다 먼저 구현.
+딥슬립이 연결 패턴을 근본적으로 바꾸기 때문에 센서·다중 연결보다 먼저 구현.
 
 - [ ] 센서노드: 1분 딥슬립 → wake-up → BLE 연결 → 데이터 전송 → 슬립
 - [ ] 허브: 노드 wake-up 시 자동 재연결 처리
@@ -37,7 +26,7 @@ ESP32-C3 2대로 BLE Central↔Peripheral 연결 확인. 하드웨어 센서 없
 
 검증: 시리얼로 wake-up → 전송 → 슬립 사이클 반복 확인 + 슬립 중 전류 <10μA
 
-## Phase 4 — 다중 노드 연결
+## Phase 3 — 다중 노드 연결
 
 허브가 여러 센서노드/IR노드를 동시에 관리. 딥슬립 노드가 수시로 나타났다 사라지는 패턴 전제.
 
@@ -48,7 +37,7 @@ ESP32-C3 2대로 BLE Central↔Peripheral 연결 확인. 하드웨어 센서 없
 
 검증: 센서노드 2대 이상 동시 연결, 각각 독립적으로 데이터 수신
 
-## Phase 5 — 허브 WiFi + 서버 연동
+## Phase 4 — 허브 WiFi + 서버 연동
 
 허브 보드(ESP32-S3)에서 WiFi + HTTP POST. BLE Central 기능과 통합.
 
@@ -59,7 +48,7 @@ ESP32-C3 2대로 BLE Central↔Peripheral 연결 확인. 하드웨어 센서 없
 
 검증: 테스트 서버 대시보드에서 실시간 데이터 확인
 
-## Phase 6 — 허브 SCD40 (CO2)
+## Phase 5 — 허브 SCD40 (CO2)
 
 허브에 SCD40 센서 연결, CO2 + 기준 온습도 측정.
 
@@ -69,7 +58,7 @@ ESP32-C3 2대로 BLE Central↔Peripheral 연결 확인. 하드웨어 센서 없
 
 검증: 대시보드에서 CO2 값 + 센서노드 온습도 동시 표시
 
-## Phase 7 — IR노드 기본
+## Phase 6 — IR노드 기본
 
 IR노드(ESP32-C3) BLE Peripheral + IR 발사.
 
@@ -81,7 +70,7 @@ IR노드(ESP32-C3) BLE Peripheral + IR 발사.
 
 검증: VS1838B IR 수신기로 신호 확인, 또는 실제 에어컨 반응 확인
 
-## Phase 8 — 서버 능동 제어
+## Phase 7 — 서버 능동 제어
 
 피기백(허브가 POST할 때 응답에 명령 실어보내기)만으로 충분한지, 서버→허브 push가 필요한지 검증.
 
@@ -91,6 +80,17 @@ IR노드(ESP32-C3) BLE Peripheral + IR 발사.
 - [ ] 판정: 피기백으로 충분하면 유지, 즉시 제어가 필요하면 WebSocket 또는 MQTT 채택
 
 검증: 서버 대시보드에서 "26도 냉방" 버튼 누르기 → IR노드가 에어컨에 IR 발사까지 E2E 지연 측정
+
+## Phase 8 — 센서노드 실제 센서 연결
+
+센서노드 보드(ESP32-C3)에 DHT22 연결, BLE로 허브에 전송. (프로덕션은 SHT40으로 교체)
+
+- [ ] DHT22 연결 + 온습도 읽기
+- [ ] LDR ADC 읽기 (GPIO2)
+- [ ] BLE Peripheral로 실제 센서값 전송 (mock 데이터 교체)
+- [ ] 배터리 전압 ADC 읽기
+
+검증: Central 쪽 시리얼에서 실제 온습도·조도 값 수신 확인
 
 ## Phase 9 — 통합 테스트
 
@@ -118,7 +118,7 @@ IR노드(ESP32-C3) BLE Peripheral + IR 발사.
 - [x] 멀티미터
 
 ### 필요
-- [ ] ESP32-S3 보드 — Phase 5 (허브용)
-- [ ] SHT40 센서 — Phase 2 이후 교체 (센서노드용)
-- [ ] SCD40 센서 — Phase 6 (허브 CO2용)
-- [ ] LDR + 10k 저항 — Phase 2 (센서노드 조도)
+- [ ] ESP32-S3 보드 — Phase 4 (허브용)
+- [ ] SHT40 센서 — Phase 8 이후 교체 (센서노드용)
+- [ ] SCD40 센서 — Phase 5 (허브 CO2용)
+- [ ] LDR + 10k 저항 — Phase 8 (센서노드 조도)
