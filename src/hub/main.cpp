@@ -23,7 +23,7 @@ static void onDataNotify(NimBLERemoteCharacteristic* c,
             if (len < sizeof(NodeInfo)) break;
             auto* ni = reinterpret_cast<NodeInfo*>(data);
             const char* typeName = (ni->node_type == NodeType::SENSOR) ? "sensor" : "ir";
-            USBSerial.printf(">> NodeInfo: type=%s id=%u bat=%umV fw=%u.%u\n",
+            Serial.printf(">> NodeInfo: type=%s id=%u bat=%umV fw=%u.%u\n",
                           typeName, ni->node_id, ni->battery_mv,
                           ni->fw_major, ni->fw_minor);
             break;
@@ -31,19 +31,19 @@ static void onDataNotify(NimBLERemoteCharacteristic* c,
         case MsgType::SENSOR_DATA: {
             if (len < sizeof(SensorData)) break;
             auto* sd = reinterpret_cast<SensorData*>(data);
-            USBSerial.printf(">> sensor: %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
+            Serial.printf(">> sensor: %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
                           sd->temp, sd->humidity, sd->ldr, sd->battery_mv);
             break;
         }
         default:
-            USBSerial.printf(">> unknown: 0x%02x (%u bytes)\n", data[0], len);
+            Serial.printf(">> unknown: 0x%02x (%u bytes)\n", data[0], len);
     }
 }
 
 class ScanCB : public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice* dev) override {
         if (dev->isAdvertisingService(NimBLEUUID(TEMPIO_SERVICE_UUID))) {
-            USBSerial.printf("found: %s  rssi=%d\n",
+            Serial.printf("found: %s  rssi=%d\n",
                           dev->getAddress().toString().c_str(), dev->getRSSI());
             NimBLEDevice::getScan()->stop();
             targetAddr = dev->getAddress();
@@ -54,14 +54,14 @@ class ScanCB : public NimBLEScanCallbacks {
 
 class ClientCB : public NimBLEClientCallbacks {
     void onConnect(NimBLEClient* c) override {
-        USBSerial.println("connected");
+        Serial.println("connected");
     }
 
     void onDisconnect(NimBLEClient* c, int reason) override {
         connected = false;
         pConfigChar = nullptr;
         digitalWrite(LED_PIN, HIGH);
-        USBSerial.printf("disconnected (reason=%d) — restarting scan\n", reason);
+        Serial.printf("disconnected (reason=%d) — restarting scan\n", reason);
         NimBLEDevice::getScan()->start(0, false);
     }
 };
@@ -71,13 +71,13 @@ bool connectToServer() {
     pClient->setClientCallbacks(new ClientCB());
 
     if (!pClient->connect(targetAddr)) {
-        USBSerial.println("connect failed");
+        Serial.println("connect failed");
         return false;
     }
 
     auto* pService = pClient->getService(TEMPIO_SERVICE_UUID);
     if (!pService) {
-        USBSerial.println("service not found");
+        Serial.println("service not found");
         pClient->disconnect();
         return false;
     }
@@ -85,7 +85,7 @@ bool connectToServer() {
     auto* pDataChar = pService->getCharacteristic(TEMPIO_CHAR_DATA_UUID);
     if (pDataChar && pDataChar->canNotify()) {
         pDataChar->subscribe(true, onDataNotify);
-        USBSerial.println("subscribed to DATA");
+        Serial.println("subscribed to DATA");
     }
 
     pConfigChar = pService->getCharacteristic(TEMPIO_CHAR_CONFIG_UUID);
@@ -107,19 +107,24 @@ void startScan() {
     pScan->setInterval(100);
     pScan->setWindow(99);
     pScan->start(0, false);
-    USBSerial.println("scanning...");
+    Serial.println("scanning...");
 }
 
 void setup() {
-    USBSerial.begin(115200);
+    Serial.begin(115200);
+    delay(3000);
+    Serial.println("=== TEMPIO HUB ===");
+
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, HIGH);
 
+    Serial.println("BLE init...");
     NimBLEDevice::init("tempio-hub");
     NimBLEDevice::setMTU(512);
+    Serial.println("BLE ok");
 
     startScan();
-    USBSerial.println("hub central ready");
+    Serial.println("hub central ready");
 }
 
 void loop() {
@@ -130,7 +135,7 @@ void loop() {
             AssignId cmd;
             cmd.node_id = 1;
             sendCommand(&cmd, sizeof(cmd));
-            USBSerial.println("<< ASSIGN_ID: 1");
+            Serial.println("<< ASSIGN_ID: 1");
         } else {
             startScan();
         }

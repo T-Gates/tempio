@@ -17,13 +17,13 @@ class ServerCB : public NimBLEServerCallbacks {
         deviceConnected = true;
         sendNodeInfo = true;
         digitalWrite(LED_PIN, LOW);
-        USBSerial.printf("connected: %s\n", info.getAddress().toString().c_str());
+        Serial.printf("connected: %s\n", info.getAddress().toString().c_str());
     }
 
     void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
         deviceConnected = false;
         digitalWrite(LED_PIN, HIGH);
-        USBSerial.printf("disconnected (reason=%d)\n", reason);
+        Serial.printf("disconnected (reason=%d)\n", reason);
         NimBLEDevice::startAdvertising();
     }
 };
@@ -38,32 +38,32 @@ class ConfigCB : public NimBLECharacteristicCallbacks {
             case MsgType::ASSIGN_ID: {
                 if (val.length() >= sizeof(AssignId)) {
                     auto* cmd = reinterpret_cast<const AssignId*>(val.data());
-                    USBSerial.printf(">> assigned id: %u\n", cmd->node_id);
+                    Serial.printf(">> assigned id: %u\n", cmd->node_id);
                 }
                 break;
             }
             case MsgType::SET_INTERVAL: {
                 if (val.length() >= sizeof(SetInterval)) {
                     auto* cmd = reinterpret_cast<const SetInterval*>(val.data());
-                    USBSerial.printf(">> interval: %u sec\n", cmd->interval_sec);
+                    Serial.printf(">> interval: %u sec\n", cmd->interval_sec);
                 }
                 break;
             }
             case MsgType::RESET_NODE: {
                 if (val.length() >= sizeof(ResetNode)) {
                     auto* cmd = reinterpret_cast<const ResetNode*>(val.data());
-                    USBSerial.printf(">> reset level: %u\n", cmd->level);
+                    Serial.printf(">> reset level: %u\n", cmd->level);
                 }
                 break;
             }
             default:
-                USBSerial.printf(">> unknown config: 0x%02x\n", val[0]);
+                Serial.printf(">> unknown config: 0x%02x\n", val[0]);
         }
     }
 };
 
 void setup() {
-    USBSerial.begin(115200);
+    Serial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, HIGH);
 
@@ -93,7 +93,7 @@ void setup() {
     pAdv->setScanResponse(true);
     pAdv->start();
 
-    USBSerial.println("sensor peripheral ready");
+    Serial.println("sensor peripheral ready");
 }
 
 void loop() {
@@ -112,7 +112,7 @@ void loop() {
         info.fw_minor = 1;
         pDataChar->setValue(reinterpret_cast<uint8_t*>(&info), sizeof(info));
         pDataChar->notify();
-        USBSerial.println("<< NodeInfo sent");
+        Serial.println("<< NodeInfo sent");
         delay(500);
     }
 
@@ -125,7 +125,7 @@ void loop() {
     pDataChar->setValue(reinterpret_cast<uint8_t*>(&data), sizeof(data));
     pDataChar->notify();
 
-    USBSerial.printf("<< %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
+    Serial.printf("<< %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
                   data.temp, data.humidity, data.ldr, data.battery_mv);
 
     delay(3000);
