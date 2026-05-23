@@ -3,7 +3,6 @@
 #include "protocol.h"
 
 // Phase 1: BLE Peripheral — mock 센서 데이터 전송
-// 실제 센서(SHT40, LDR)는 Phase 2에서 연결
 
 static constexpr uint8_t LED_PIN = 8;
 
@@ -63,7 +62,10 @@ class ConfigCB : public NimBLECharacteristicCallbacks {
 };
 
 void setup() {
+    delay(3000);
     Serial.begin(115200);
+    while (!Serial) { delay(10); }
+
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, HIGH);
 
@@ -92,11 +94,16 @@ void setup() {
     pAdv->addServiceUUID(TEMPIO_SERVICE_UUID);
     pAdv->setScanResponse(true);
     pAdv->start();
-
-    Serial.println("sensor peripheral ready");
 }
 
+static unsigned long lastPrint = 0;
+
 void loop() {
+    if (!deviceConnected && millis() - lastPrint > 5000) {
+        lastPrint = millis();
+        Serial.println("advertising...");
+    }
+
     if (!deviceConnected) {
         delay(500);
         return;
