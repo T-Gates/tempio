@@ -18,7 +18,6 @@ static NimBLECharacteristic* pDataChar   = nullptr;
 static NimBLECharacteristic* pConfigChar = nullptr;
 static volatile bool     deviceConnected = false;
 static volatile bool     hubReady        = false;  // HUB_READY 수신 플래그
-static volatile bool     configReceived  = false;  // ASSIGN_ID 등 후속 명령 수신 플래그
 static volatile uint16_t hubConnHandle   = 0;
 
 // ══════════════════════════════════════════════════════════════════════
@@ -53,16 +52,6 @@ class ConfigCB : public NimBLECharacteristicCallbacks {
                 hubReady = true;
                 break;
             }
-            case MsgType::ASSIGN_ID: {
-                if (val.length() >= sizeof(AssignId)) {
-                    AssignId cmd;
-                    memcpy(&cmd, val.data(), sizeof(cmd));
-                    state.setNodeId(cmd.node_id);
-                    Serial.printf(">> assigned id: %u\n", cmd.node_id);
-                }
-                configReceived = true;
-                break;
-            }
             case MsgType::SET_INTERVAL: {
                 if (val.length() >= sizeof(SetInterval)) {
                     SetInterval cmd;
@@ -70,7 +59,6 @@ class ConfigCB : public NimBLECharacteristicCallbacks {
                     state.setSleepInterval(cmd.interval_sec);
                     Serial.printf(">> interval: %u sec\n", state.sleepInterval());
                 }
-                configReceived = true;
                 break;
             }
             case MsgType::RESET_NODE: {
@@ -102,8 +90,7 @@ void ble_peripheral_init() {
     digitalWrite(LED_PIN, HIGH);
 
     state.begin();
-    Serial.printf("state: node_id=%u interval=%u\n",
-                  state.nodeId(), state.sleepInterval());
+    Serial.printf("state: interval=%u\n", state.sleepInterval());
 
     NimBLEDevice::init("tempio-sensor");
     NimBLEDevice::setMTU(512);
@@ -151,29 +138,18 @@ bool ble_wait_hub_ready(uint32_t timeout_ms) {
     return true;
 }
 
-bool ble_wait_config(uint32_t timeout_ms) {
-    unsigned long start = millis();
-    while (!configReceived) {
-        if (!deviceConnected) return false;
-        if (millis() - start >= timeout_ms) return false;
-        delay(10);
-    }
-    return true;
-}
-
 void ble_send_node_info() {
     if (!pDataChar || !deviceConnected) return;
 
     NodeInfo info;
     info.node_type  = NodeType::SENSOR;
-    info.node_id    = state.nodeId();
     info.battery_mv = 3100;  // TODO: ADC 실측
     info.fw_major   = 0;
     info.fw_minor   = 1;
 
     pDataChar->setValue(reinterpret_cast<uint8_t*>(&info), sizeof(info));
     pDataChar->notify();
-    Serial.printf("<< NodeInfo: id=%u\n", state.nodeId());
+    Serial.println("<< NodeInfo sent");
 }
 
 void ble_send_sensor_data() {
@@ -206,10 +182,6 @@ void ble_disconnect() {
 
 bool ble_is_connected() {
     return deviceConnected;
-}
-
-uint8_t ble_get_node_id() {
-    return state.nodeId();
 }
 
 uint16_t ble_get_sleep_interval() {

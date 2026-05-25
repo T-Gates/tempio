@@ -10,9 +10,11 @@
 //   3. loop()가 매 프레임 돌면서:
 //      a) 끊긴 연결 정리
 //      b) pending 큐에서 주소를 하나 꺼내 연결 시도
-//      c) 연결되면 → 서비스 탐색 → DATA 특성 구독 → ASSIGN_ID 전송
+//      c) 연결되면 → 서비스 탐색 → DATA 특성 구독 → HUB_READY 전송
 //   4. 센서노드가 보내는 notify 데이터는 onDataNotify 콜백으로 수신.
 //   5. 노드가 끊기면 슬롯 해제 → 재스캔.
+//
+// 노드 식별: BLE MAC 주소 (공장 고유). 별도 ID 부여 없음.
 //
 // 왜 pending 큐를 쓰나?
 //   connect()는 blocking(완료될 때까지 멈춤)이라 스캔 콜백 안에서 부르면
@@ -35,17 +37,12 @@ static constexpr int MAX_NODES = 5;  // 동시 연결 상한 (S3은 5대, C3은 
 struct ConnectedNode {
     NimBLEClient* client = nullptr;                   // BLE 연결 객체 (전화기)
     NimBLERemoteCharacteristic* configChar = nullptr; // 노드의 CONFIG 특성 핸들 (명령 전송용)
-    NimBLEAddress addr;                               // 노드의 BLE MAC 주소
-    uint8_t  nodeId   = 0;                            // 허브가 부여한 ID (1, 2, 3...)
+    NimBLEAddress addr;                               // 노드의 BLE MAC 주소 (= 노드 식별자)
     NodeType nodeType = NodeType::SENSOR;              // 센서인지 IR인지
     bool     used     = false;                        // 이 슬롯이 사용 중인지
 };
 
 static ConnectedNode nodes[MAX_NODES];  // 슬롯 배열 — 이게 연결 관리의 핵심
-
-// 다음에 부여할 노드 ID. 연결할 때마다 1씩 증가.
-// TODO: NVS에 저장해야 재부팅 후에도 ID가 안 겹침
-static uint8_t nextNodeId = 1;
 
 // ──────────── 연결 대기 큐 (pending queue) ────────────
 // 스캔에서 발견했지만 아직 연결 안 한 주소들.
@@ -96,10 +93,10 @@ static int findSlotByClient(const NimBLEClient* c) {
     return -1;
 }
 
-// 노드 ID로 슬롯 찾기 (특정 노드에 명령 보낼 때)
-static int findSlotByNodeId(uint8_t nodeId) {
+// MAC 주소로 슬롯 찾기 (특정 노드에 명령 보낼 때)
+static int findSlotByAddr(const NimBLEAddress& addr) {
     for (int i = 0; i < MAX_NODES; i++) {
-        if (nodes[i].used && nodes[i].nodeId == nodeId) return i;
+        if (nodes[i].used && nodes[i].addr == addr) return i;
     }
     return -1;
 }
@@ -143,41 +140,26 @@ static void onDataNotify(NimBLERemoteCharacteristic* c,
     int slot = -1;
     auto* svc = c->getRemoteService();
     if (svc) slot = findSlotByClient(svc->getClient());
-    uint8_t srcId = (slot >= 0) ? nodes[slot].nodeId : 0;
+    const char* srcAddr = (slot >= 0)
+        ? nodes[slot].addr.toString().c_str() : "??";
 
     // data[0]이 메시지 타입 — protocol.h의 MsgType enum 값.
     auto type = static_cast<MsgType>(data[0]);
 
     switch (type) {
         case MsgType::NODE_INFO: {
-            // 센서노드의 자기소개: 타입, ID, 배터리, 펌웨어 버전
+            // 센서노드의 자기소개: 타입, 배터리, 펌웨어 버전
             if (len < sizeof(NodeInfo)) break;
             NodeInfo ni;
             memcpy(&ni, data, sizeof(ni));
 
             if (slot >= 0) {
                 nodes[slot].nodeType = ni.node_type;
-
-                if (ni.node_id == 0) {
-                    // 신규 노드 → 새 ID 부여
-                    nodes[slot].nodeId = nextNodeId++;
-                    AssignId cmd;
-                    cmd.node_id = nodes[slot].nodeId;
-                    if (nodes[slot].configChar) {
-                        nodes[slot].configChar->writeValue(
-                            reinterpret_cast<const uint8_t*>(&cmd), sizeof(cmd));
-                    }
-                    Serial.printf("<< ASSIGN_ID: %u → node\n", nodes[slot].nodeId);
-                } else {
-                    // 기존 노드 → ID 그대로 인식
-                    nodes[slot].nodeId = ni.node_id;
-                }
             }
 
             const char* typeName = (ni.node_type == NodeType::SENSOR) ? "sensor" : "ir";
-            uint8_t finalId = (slot >= 0) ? nodes[slot].nodeId : ni.node_id;
-            Serial.printf(">> [node %u] NodeInfo: type=%s bat=%umV fw=%u.%u\n",
-                          finalId, typeName, ni.battery_mv, ni.fw_major, ni.fw_minor);
+            Serial.printf(">> [%s] NodeInfo: type=%s bat=%umV fw=%u.%u\n",
+                          srcAddr, typeName, ni.battery_mv, ni.fw_major, ni.fw_minor);
             break;
         }
         case MsgType::SENSOR_DATA: {
@@ -185,14 +167,14 @@ static void onDataNotify(NimBLERemoteCharacteristic* c,
             if (len < sizeof(SensorData)) break;
             SensorData sd;
             memcpy(&sd, data, sizeof(sd));
-            Serial.printf(">> [node %u] sensor: %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
-                          srcId, sd.temp, sd.humidity, sd.ldr, sd.battery_mv);
+            Serial.printf(">> [%s] sensor: %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
+                          srcAddr, sd.temp, sd.humidity, sd.ldr, sd.battery_mv);
             // TODO: 여기서 WiFi로 서버에 전송하거나 버퍼에 쌓는 로직 추가
             break;
         }
         default:
-            Serial.printf(">> [node %u] unknown: 0x%02x (%u bytes)\n",
-                          srcId, data[0], len);
+            Serial.printf(">> [%s] unknown: 0x%02x (%u bytes)\n",
+                          srcAddr, data[0], len);
     }
 }
 
@@ -240,8 +222,8 @@ class ClientCB : public NimBLEClientCallbacks {
         // 실제 메모리 해제(deleteClient)는 loop()의 cleanupDisconnected()에서.
         int slot = findSlotByClient(c);
         if (slot >= 0) {
-            Serial.printf("node %u disconnected (reason=%d)\n",
-                          nodes[slot].nodeId, reason);
+            Serial.printf("%s disconnected (reason=%d)\n",
+                          nodes[slot].addr.toString().c_str(), reason);
             nodes[slot].used = false;
             nodes[slot].configChar = nullptr;
         }
@@ -263,8 +245,8 @@ static ClientCB clientCb;  // 클라이언트 콜백 인스턴스
 //   2) 상대 주소로 BLE 연결 (connect — blocking, 수초 걸릴 수 있음)
 //   3) 서비스 탐색 (getService) — "tempio 서비스 있냐?" 물어보는 것
 //   4) DATA 특성 구독 (subscribe) — "너가 notify 보내면 나한테 알려줘"
-//   5) 슬롯에 저장 (nodeId는 아직 0 — NODE_INFO 수신 후 결정)
-//   6) HUB_READY 전송 — "나 준비됐어, 너 누구야?"
+//   5) 슬롯에 저장 (MAC 주소가 곧 식별자)
+//   6) HUB_READY 전송 — "나 준비됐어, 데이터 보내도 돼"
 
 static bool connectToNode(const NimBLEAddress& addr) {
     int slot = findEmptySlot();
@@ -308,11 +290,10 @@ static bool connectToNode(const NimBLEAddress& addr) {
         return false;
     }
 
-    // 5) 슬롯에 저장 — nodeId는 0으로 둠. NODE_INFO 수신 후 확정.
+    // 5) 슬롯에 저장 — MAC 주소가 곧 노드 식별자.
     nodes[slot].client     = client;
     nodes[slot].configChar = svc->getCharacteristic(TEMPIO_CHAR_CONFIG_UUID);
     nodes[slot].addr       = addr;
-    nodes[slot].nodeId     = 0;
     nodes[slot].used       = true;
 
     // 6) HUB_READY 전송 — "subscribe 끝남, 너 누구야?"
@@ -393,10 +374,11 @@ int ble_connected_count() {
     return activeCount();
 }
 
-// 특정 노드에 명령 전송. nodeId로 슬롯 찾고 CONFIG 특성에 write.
+// 특정 노드에 명령 전송. MAC 주소로 슬롯 찾고 CONFIG 특성에 write.
 // 예: SET_INTERVAL, RESET_NODE 등을 서버→허브→노드로 내릴 때 사용.
-bool ble_send_to_node(uint8_t nodeId, const void* data, size_t len) {
-    int slot = findSlotByNodeId(nodeId);
+bool ble_send_to_node(const char* addrStr, const void* data, size_t len) {
+    NimBLEAddress addr(addrStr);
+    int slot = findSlotByAddr(addr);
     if (slot < 0 || !nodes[slot].configChar) return false;
 
     nodes[slot].configChar->writeValue(

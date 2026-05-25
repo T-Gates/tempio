@@ -15,6 +15,6 @@ void ble_central_loop();
 int ble_connected_count();
 
 // 특정 노드에 명령 전송.
-// nodeId로 대상 지정, CONFIG 특성에 write.
+// MAC 주소 문자열("AA:BB:CC:DD:EE:FF")로 대상 지정, CONFIG 특성에 write.
 // 성공 true, 실패(미연결/노드 없음) false.
-bool ble_send_to_node(uint8_t nodeId, const void* data, size_t len);
+bool ble_send_to_node(const char* addrStr, const void* data, size_t len);

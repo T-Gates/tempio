@@ -26,8 +26,7 @@ enum class MsgType : uint8_t {
     SENSOR_DATA    = 0x01,  // 센서노드 → 허브: 온습도 + 조도 + 배터리
     IR_TIMING      = 0x02,  // 허브 → IR노드: raw IR 타이밍 배열
 
-    HUB_READY      = 0x10,  // 허브 → 노드: "subscribe 완료, 너 누구야?" (연결 직후)
-    ASSIGN_ID      = 0x11,  // 허브 → 노드: 노드 ID 부여 (신규 노드에만)
+    HUB_READY      = 0x10,  // 허브 → 노드: "subscribe 완료, 데이터 보내도 돼" (연결 직후)
     SET_INTERVAL   = 0x12,  // 허브 → 센서노드: 측정 주기 변경 (초 단위)
     RESET_NODE     = 0x13,  // 허브 → 노드: 리셋 명령 (레벨별)
 
@@ -55,12 +54,12 @@ struct SensorData {
     uint16_t battery_mv;  // 배터리 전압 (mV), ADC로 측정
 } __attribute__((packed));
 
-// 노드 → 허브 (7바이트)
-// 연결 직후 자기 소개용. 허브는 이걸로 센서/IR 구분 + 상태 파악
+// 노드 → 허브 (6바이트)
+// 연결 직후 자기 소개용. 허브는 이걸로 센서/IR 구분 + 상태 파악.
+// 노드 식별은 BLE MAC 주소로 — 별도 ID 부여 불필요.
 struct NodeInfo {
     MsgType  type = MsgType::NODE_INFO;
     NodeType node_type;   // SENSOR 또는 IR
-    uint8_t  node_id;     // 허브가 부여한 ID (0이면 미할당 = 신규 노드)
     uint16_t battery_mv;  // 배터리 전압 (mV)
     uint8_t  fw_major;    // 펌웨어 버전 (major)
     uint8_t  fw_minor;    // 펌웨어 버전 (minor)
@@ -88,14 +87,6 @@ struct NodeInfo {
 // 노드는 이걸 받으면 NODE_INFO를 보내도 안전하다는 뜻.
 struct HubReady {
     MsgType type = MsgType::HUB_READY;
-} __attribute__((packed));
-
-// 허브 → 노드: 노드 ID 부여 (2바이트)
-// 신규 노드(node_id=0)가 NODE_INFO로 id=0을 보내면 허브가 새 ID를 발급.
-// 노드는 NVS에 저장해서 다음 부팅에도 유지.
-struct AssignId {
-    MsgType type = MsgType::ASSIGN_ID;
-    uint8_t node_id;  // 1~254 사용, 0=미할당, 255=예약
 } __attribute__((packed));
 
 // 허브 → 센서노드: 측정 주기 변경 (3바이트)
