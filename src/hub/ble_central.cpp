@@ -140,8 +140,11 @@ static void onDataNotify(NimBLERemoteCharacteristic* c,
     int slot = -1;
     auto* svc = c->getRemoteService();
     if (svc) slot = findSlotByClient(svc->getClient());
-    const char* srcAddr = (slot >= 0)
-        ? nodes[slot].addr.toString().c_str() : "??";
+    // toString()은 임시 std::string을 반환 → c_str()만 저장하면 댕글링 포인터.
+    // string 자체를 보관해야 포인터가 유효.
+    std::string srcAddrStr = (slot >= 0)
+        ? nodes[slot].addr.toString() : "??";
+    const char* srcAddr = srcAddrStr.c_str();
 
     // data[0]이 메시지 타입 — protocol.h의 MsgType enum 값.
     auto type = static_cast<MsgType>(data[0]);
