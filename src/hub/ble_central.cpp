@@ -1,211 +1,387 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// ble_central.cpp — 허브(Hub) BLE Central 로직 (다중 연결)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// 전체 흐름 (큰 그림):
+//
+//   1. init()에서 BLE 스캔을 시작한다.
+//   2. 스캔 중 tempio 서비스 UUID를 광고하는 장치를 발견하면
+//      → pending 큐(대기열)에 주소를 넣어둔다.
+//   3. loop()가 매 프레임 돌면서:
+//      a) 끊긴 연결 정리
+//      b) pending 큐에서 주소를 하나 꺼내 연결 시도
+//      c) 연결되면 → 서비스 탐색 → DATA 특성 구독 → ASSIGN_ID 전송
+//   4. 센서노드가 보내는 notify 데이터는 onDataNotify 콜백으로 수신.
+//   5. 노드가 끊기면 슬롯 해제 → 재스캔.
+//
+// 왜 pending 큐를 쓰나?
+//   connect()는 blocking(완료될 때까지 멈춤)이라 스캔 콜백 안에서 부르면
+//   BLE 스택이 꼬인다. 그래서 "발견"과 "연결"을 분리.
+
 #include <Arduino.h>
-#include <NimBLEDevice.h>
-#include <cstring>
-#include "protocol.h"
+#include <NimBLEDevice.h>     // NimBLE: ESP32용 경량 BLE 라이브러리
+#include <cstring>            // memcpy 쓰려고
+#include "protocol.h"         // 우리 프로토콜: UUID, MsgType, 패킷 구조체들
 #include "ble_central.h"
 
-// ESP32-C3 SuperMini 내장 LED. GPIO8, active-low (LOW=켜짐, HIGH=꺼짐)
-static constexpr uint8_t LED_PIN = 8;
+static constexpr uint8_t LED_PIN = 8;  // C3 내장 LED (active-low: LOW=켜짐)
 
-// 센서노드에 연결하는 BLE 클라이언트 객체. 이걸로 connect/disconnect/서비스 탐색을 함.
-// 연결 전이나 정리 후에는 nullptr
-static NimBLEClient* pClient = nullptr;
+// ──────────── 다중 연결 관리 ────────────
 
-// 센서노드의 CONFIG 특성(0003) 원격 참조.
-// 이걸 통해 센서노드에 명령(ASSIGN_ID, SET_INTERVAL 등)을 write로 보냄.
-// 연결 끊기면 nullptr로 초기화됨
-static NimBLERemoteCharacteristic* pConfigChar = nullptr;
+static constexpr int MAX_NODES = 5;  // 동시 연결 상한 (S3은 5대, C3은 3대 권장)
 
-// 센서노드와 현재 BLE 연결이 되어있는지 여부.
-// true=연결됨, false=끊김 또는 미연결.
-// volatile: BLE 콜백(onDisconnect)과 loop()가 서로 다른 태스크에서 읽고 쓰기 때문에 필요
-static volatile bool connected = false;
+// 연결된 노드 하나의 정보를 묶는 구조체.
+// nodes[0]~nodes[4]가 "슬롯" 역할. used==true면 활성 연결.
+struct ConnectedNode {
+    NimBLEClient* client = nullptr;                   // BLE 연결 객체 (전화기)
+    NimBLERemoteCharacteristic* configChar = nullptr; // 노드의 CONFIG 특성 핸들 (명령 전송용)
+    NimBLEAddress addr;                               // 노드의 BLE MAC 주소
+    uint8_t  nodeId   = 0;                            // 허브가 부여한 ID (1, 2, 3...)
+    NodeType nodeType = NodeType::SENSOR;              // 센서인지 IR인지
+    bool     used     = false;                        // 이 슬롯이 사용 중인지
+};
 
-// 스캔에서 센서노드를 발견했을 때 true로 설정됨.
-// loop()에서 이걸 보고 connectToServer()를 호출함.
-// volatile: 스캔 콜백(BLE 태스크)에서 쓰고, loop()(Arduino 태스크)에서 읽기 때문
-static volatile bool doConnect = false;
+static ConnectedNode nodes[MAX_NODES];  // 슬롯 배열 — 이게 연결 관리의 핵심
 
-// 연결이 끊겼을 때 true로 설정됨.
-// onDisconnect 콜백 안에서 직접 스캔을 시작하면 NimBLE 내부 상태가 불안정할 수 있어서,
-// loop()에서 이 플래그를 보고 스캔을 재시작함
-static volatile bool doScan = false;
+// 다음에 부여할 노드 ID. 연결할 때마다 1씩 증가.
+// TODO: NVS에 저장해야 재부팅 후에도 ID가 안 겹침
+static uint8_t nextNodeId = 1;
 
-// 스캔에서 발견한 센서노드의 BLE 주소 (MAC 주소 같은 것).
-// ScanCB::onResult()에서 저장하고, connectToServer()에서 이 주소로 연결함
-static NimBLEAddress targetAddr;
+// ──────────── 연결 대기 큐 (pending queue) ────────────
+// 스캔에서 발견했지만 아직 연결 안 한 주소들.
+// 파이썬의 list.append() → list.pop(0) 같은 역할인데, 고정 배열로 구현.
+static constexpr int PENDING_MAX = 8;
+static NimBLEAddress pendingAddrs[PENDING_MAX];  // 대기 중인 주소 배열
+static int pendingCount = 0;                      // 현재 대기 수
 
-// 마지막으로 "scanning..." 메시지를 시리얼에 출력한 시각 (millis 기준).
-// 5초마다 한 번 출력하기 위한 타이머
-static unsigned long lastPrint = 0;
+// ──────────── 플래그 ────────────
+static volatile bool doScan = false;       // true면 다음 loop()에서 스캔 재시작
+static unsigned long lastPrint = 0;        // 상태 출력 타이머 (5초마다)
 
-// ──────────── notify 수신 ────────────
+// ══════════════════════════════════════════════════════════════════════
+// 헬퍼 함수 — nodes[] 배열을 검색/관리하는 유틸리티
+// 파이썬이었으면 dict나 list comprehension으로 한 줄이지만,
+// C++에서는 for문으로 배열을 직접 뒤진다.
+// ══════════════════════════════════════════════════════════════════════
+
+// 이미 연결된 주소인지 확인 (중복 연결 방지)
+static bool isAlreadyConnected(const NimBLEAddress& addr) {
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (nodes[i].used && nodes[i].addr == addr) return true;
+    }
+    return false;
+}
+
+// 이미 대기 큐에 들어간 주소인지 확인 (중복 큐잉 방지)
+static bool isAlreadyPending(const NimBLEAddress& addr) {
+    for (int i = 0; i < pendingCount; i++) {
+        if (pendingAddrs[i] == addr) return true;
+    }
+    return false;
+}
+
+// 비어있는 슬롯 번호 반환. 다 차면 -1.
+static int findEmptySlot() {
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (!nodes[i].used) return i;
+    }
+    return -1;
+}
+
+// NimBLEClient 포인터로 슬롯 찾기 (콜백에서 "이 연결이 누구인지" 알아낼 때)
+static int findSlotByClient(const NimBLEClient* c) {
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (nodes[i].used && nodes[i].client == c) return i;
+    }
+    return -1;
+}
+
+// 노드 ID로 슬롯 찾기 (특정 노드에 명령 보낼 때)
+static int findSlotByNodeId(uint8_t nodeId) {
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (nodes[i].used && nodes[i].nodeId == nodeId) return i;
+    }
+    return -1;
+}
+
+// 현재 활성 연결 수 (파이썬: sum(1 for n in nodes if n.used))
+static int activeCount() {
+    int count = 0;
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (nodes[i].used) count++;
+    }
+    return count;
+}
+
+// 끊긴 클라이언트를 NimBLE 내부 풀에 반환 (메모리 해제).
+// onDisconnect 콜백에서는 used=false만 표시하고, 실제 삭제는 여기서.
+// 왜? 콜백 안에서 deleteClient 하면 "내가 타고 있는 버스를 폭파"하는 꼴.
+static void cleanupDisconnected() {
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (!nodes[i].used && nodes[i].client) {
+            NimBLEDevice::deleteClient(nodes[i].client);
+            nodes[i].client = nullptr;
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// notify 수신 콜백 — 센서노드가 데이터를 보내면 여기로 온다
+// ══════════════════════════════════════════════════════════════════════
+//
+// BLE에서 notify란?
+//   센서노드(peripheral)가 허브(central)에게 "나 데이터 있어!" 하고 밀어주는 것.
+//   허브가 요청하는 게 아니라, 센서가 능동적으로 보내는 push 방식.
+//   아래 함수는 NimBLE가 notify를 받을 때마다 자동으로 호출해주는 콜백.
 
 static void onDataNotify(NimBLERemoteCharacteristic* c,
                          uint8_t* data, size_t len, bool isNotify) {
     if (len < 1) return;
 
+    // 이 데이터를 보낸 노드가 누구인지 찾는다.
+    // 특성(c) → 서비스 → 클라이언트 → nodes[] 슬롯 순으로 역추적.
+    int slot = -1;
+    auto* svc = c->getRemoteService();
+    if (svc) slot = findSlotByClient(svc->getClient());
+    uint8_t srcId = (slot >= 0) ? nodes[slot].nodeId : 0;
+
+    // data[0]이 메시지 타입 — protocol.h의 MsgType enum 값.
     auto type = static_cast<MsgType>(data[0]);
+
     switch (type) {
         case MsgType::NODE_INFO: {
+            // 센서노드의 자기소개: 타입, 배터리, 펌웨어 버전
             if (len < sizeof(NodeInfo)) break;
-            // memcpy로 정렬 안전하게 복사 (reinterpret_cast 대신)
             NodeInfo ni;
-            memcpy(&ni, data, sizeof(ni));
+            memcpy(&ni, data, sizeof(ni));  // 바이트 배열 → 구조체로 복사
             const char* typeName = (ni.node_type == NodeType::SENSOR) ? "sensor" : "ir";
-            Serial.printf(">> NodeInfo: type=%s id=%u bat=%umV fw=%u.%u\n",
-                          typeName, ni.node_id, ni.battery_mv,
-                          ni.fw_major, ni.fw_minor);
+            Serial.printf(">> [node %u] NodeInfo: type=%s bat=%umV fw=%u.%u\n",
+                          srcId, typeName, ni.battery_mv, ni.fw_major, ni.fw_minor);
+            if (slot >= 0) nodes[slot].nodeType = ni.node_type;
             break;
         }
         case MsgType::SENSOR_DATA: {
+            // 센서 측정값: 온도, 습도, 조도, 배터리
             if (len < sizeof(SensorData)) break;
             SensorData sd;
             memcpy(&sd, data, sizeof(sd));
-            Serial.printf(">> sensor: %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
-                          sd.temp, sd.humidity, sd.ldr, sd.battery_mv);
+            Serial.printf(">> [node %u] sensor: %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
+                          srcId, sd.temp, sd.humidity, sd.ldr, sd.battery_mv);
+            // TODO: 여기서 WiFi로 서버에 전송하거나 버퍼에 쌓는 로직 추가
             break;
         }
         default:
-            Serial.printf(">> unknown: 0x%02x (%u bytes)\n", data[0], len);
+            Serial.printf(">> [node %u] unknown: 0x%02x (%u bytes)\n",
+                          srcId, data[0], len);
     }
 }
 
-// ──────────── 콜백 (static 인스턴스로 힙 할당 방지) ────────────
+// ══════════════════════════════════════════════════════════════════════
+// BLE 콜백 클래스
+// ══════════════════════════════════════════════════════════════════════
+//
+// BLE에서 "콜백"이란?
+//   NimBLE가 이벤트(장치 발견, 연결, 끊김)를 감지하면
+//   우리가 등록한 함수를 자동으로 호출해주는 것.
+//   파이썬의 on_message, on_connect 핸들러와 같은 개념.
 
+// ── 스캔 콜백 ──
+// BLE 스캔 중 주변 장치가 발견될 때마다 onResult()가 호출된다.
+// 우리 서비스 UUID를 광고하는 놈만 걸러서 pending 큐에 넣는다.
 class ScanCB : public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice* dev) override {
-        if (dev->isAdvertisingService(NimBLEUUID(TEMPIO_SERVICE_UUID))) {
-            Serial.printf("found: %s  rssi=%d\n",
-                          dev->getAddress().toString().c_str(), dev->getRSSI());
-            NimBLEDevice::getScan()->stop();
-            targetAddr = dev->getAddress();
-            doConnect = true;
-        }
+        // 우리 tempio 서비스가 아니면 무시
+        if (!dev->isAdvertisingService(NimBLEUUID(TEMPIO_SERVICE_UUID))) return;
+
+        auto addr = dev->getAddress();
+
+        // 4가지 조건 중 하나라도 걸리면 무시:
+        if (isAlreadyConnected(addr)) return;     // 이미 연결된 놈
+        if (isAlreadyPending(addr))   return;     // 이미 큐에 들어간 놈
+        if (findEmptySlot() < 0)      return;     // 슬롯 다 찼음
+        if (pendingCount >= PENDING_MAX) return;   // 큐 다 찼음
+
+        Serial.printf("found: %s  rssi=%d\n",
+                      addr.toString().c_str(), dev->getRSSI());
+
+        pendingAddrs[pendingCount++] = addr;  // 큐에 추가
     }
 };
 
+// ── 클라이언트 콜백 ──
+// 연결/끊김 이벤트를 처리한다.
 class ClientCB : public NimBLEClientCallbacks {
     void onConnect(NimBLEClient* c) override {
-        Serial.println("connected");
+        Serial.printf("connected: %s\n", c->getPeerAddress().toString().c_str());
     }
 
     void onDisconnect(NimBLEClient* c, int reason) override {
-        connected = false;
-        pConfigChar = nullptr;
-        digitalWrite(LED_PIN, HIGH);
-        Serial.printf("disconnected (reason=%d)\n", reason);
-        // 콜백 안에서 직접 스캔 시작하지 않고 loop에 위임
-        doScan = true;
+        // 끊긴 클라이언트가 어떤 슬롯인지 찾아서 used=false로만 표시.
+        // 실제 메모리 해제(deleteClient)는 loop()의 cleanupDisconnected()에서.
+        int slot = findSlotByClient(c);
+        if (slot >= 0) {
+            Serial.printf("node %u disconnected (reason=%d)\n",
+                          nodes[slot].nodeId, reason);
+            nodes[slot].used = false;
+            nodes[slot].configChar = nullptr;
+        }
+        // LED: 연결된 노드가 하나라도 있으면 켜짐, 없으면 꺼짐
+        digitalWrite(LED_PIN, activeCount() > 0 ? LOW : HIGH);
+        doScan = true;  // 다음 loop()에서 스캔 재시작
     }
 };
 
-// 콜백 객체를 static으로 한 번만 생성해서 재사용.
-// new로 매번 만들면 힙 메모리가 쌓이고 안 지워짐
-static ScanCB scanCb;    // 스캔 결과 콜백 — BLE 기기 발견 시 호출됨
-static ClientCB clientCb; // 연결/해제 콜백 — 센서노드와 연결 상태 변할 때 호출됨
+static ScanCB  scanCb;    // 스캔 콜백 인스턴스 (전역 — 한 번만 생성)
+static ClientCB clientCb;  // 클라이언트 콜백 인스턴스
 
-// ──────────── 연결·명령 ────────────
+// ══════════════════════════════════════════════════════════════════════
+// 연결 함수 — 센서노드 하나와의 연결을 처음부터 끝까지 처리
+// ══════════════════════════════════════════════════════════════════════
+//
+// 연결 시퀀스:
+//   1) NimBLE 클라이언트 생성 (createClient)
+//   2) 상대 주소로 BLE 연결 (connect — blocking, 수초 걸릴 수 있음)
+//   3) 서비스 탐색 (getService) — "tempio 서비스 있냐?" 물어보는 것
+//   4) DATA 특성 구독 (subscribe) — "너가 notify 보내면 나한테 알려줘"
+//   5) 슬롯에 정보 저장
+//   6) ASSIGN_ID 전송 — "너 이제부터 3번이야" (센서는 이걸 받아야 데이터를 보냄)
 
-static bool connectToServer() {
-    // 기존 클라이언트가 있으면 정리 (풀 소진 방지)
-    if (pClient) {
-        NimBLEDevice::deleteClient(pClient);
-        pClient = nullptr;
+static bool connectToNode(const NimBLEAddress& addr) {
+    int slot = findEmptySlot();
+    if (slot < 0) {
+        Serial.println("no empty slot");
+        return false;
     }
 
-    pClient = NimBLEDevice::createClient();
-    if (!pClient) {
+    // 1) BLE 클라이언트 생성 — NimBLE 내부 풀에서 하나 꺼내옴
+    auto* client = NimBLEDevice::createClient();
+    if (!client) {
         Serial.println("createClient failed");
         return false;
     }
-    pClient->setClientCallbacks(&clientCb);
+    client->setClientCallbacks(&clientCb);  // 끊김 이벤트를 받으려고 콜백 등록
 
-    if (!pClient->connect(targetAddr)) {
-        Serial.println("connect failed");
-        // 실패 시 클라이언트 정리 (풀 슬롯 반환)
-        NimBLEDevice::deleteClient(pClient);
-        pClient = nullptr;
+    // 2) BLE 연결 — 실패하면 클라이언트 반환
+    if (!client->connect(addr)) {
+        Serial.printf("connect failed: %s\n", addr.toString().c_str());
+        NimBLEDevice::deleteClient(client);
         return false;
     }
 
-    auto* pService = pClient->getService(TEMPIO_SERVICE_UUID);
-    if (!pService) {
+    // 3) 서비스 탐색 — 상대방이 가진 BLE 서비스 중 우리 UUID를 찾는다
+    auto* svc = client->getService(TEMPIO_SERVICE_UUID);
+    if (!svc) {
         Serial.println("service not found");
-        pClient->disconnect();
-        NimBLEDevice::deleteClient(pClient);
-        pClient = nullptr;
+        client->disconnect();
+        NimBLEDevice::deleteClient(client);
         return false;
     }
 
-    auto* pDataChar = pService->getCharacteristic(TEMPIO_CHAR_DATA_UUID);
-    if (pDataChar && pDataChar->canNotify()) {
-        pDataChar->subscribe(true, onDataNotify);
-        Serial.println("subscribed to DATA");
+    // 4) DATA 특성 구독 — notify가 오면 onDataNotify 콜백으로 받겠다는 등록
+    auto* dataChar = svc->getCharacteristic(TEMPIO_CHAR_DATA_UUID);
+    if (dataChar && dataChar->canNotify()) {
+        dataChar->subscribe(true, onDataNotify);
     } else {
-        // DATA 구독 실패 — 센서값을 받을 수 없으므로 연결 의미 없음
-        Serial.println("DATA subscribe failed — disconnecting");
-        pClient->disconnect();
-        NimBLEDevice::deleteClient(pClient);
-        pClient = nullptr;
+        Serial.println("DATA subscribe failed");
+        client->disconnect();
+        NimBLEDevice::deleteClient(client);
         return false;
     }
 
-    pConfigChar = pService->getCharacteristic(TEMPIO_CHAR_CONFIG_UUID);
+    // 5) 슬롯에 저장
+    nodes[slot].client     = client;
+    nodes[slot].configChar = svc->getCharacteristic(TEMPIO_CHAR_CONFIG_UUID);
+    nodes[slot].addr       = addr;
+    nodes[slot].nodeId     = nextNodeId++;  // ID 부여 후 1 증가
+    nodes[slot].used       = true;
 
-    connected = true;
-    digitalWrite(LED_PIN, LOW);
+    // 6) ASSIGN_ID 전송 — 센서노드는 이걸 받아야 "허브 준비 완료"로 인식
+    delay(200);  // subscribe 완료 보장용 짧은 대기
+    AssignId cmd;
+    cmd.node_id = nodes[slot].nodeId;
+    if (nodes[slot].configChar) {
+        nodes[slot].configChar->writeValue(
+            reinterpret_cast<const uint8_t*>(&cmd), sizeof(cmd));
+    }
+    Serial.printf("<< ASSIGN_ID: %u → %s\n",
+                  nodes[slot].nodeId, addr.toString().c_str());
+
+    digitalWrite(LED_PIN, LOW);  // 연결 성공 → LED 켜기
     return true;
 }
 
-static void sendCommand(const void* data, size_t len) {
-    if (!connected || !pConfigChar) return;
-    pConfigChar->writeValue(reinterpret_cast<const uint8_t*>(data), len);
-}
+// ══════════════════════════════════════════════════════════════════════
+// 공개 API — 외부에서 호출하는 함수들 (ble_central.h에 선언)
+// ══════════════════════════════════════════════════════════════════════
 
-// ──────────── 공개 API ────────────
-
+// setup()에서 한 번 호출. BLE 스택 초기화 + 스캔 시작.
 void ble_central_init() {
     pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(LED_PIN, HIGH);   // LED 끔 (active-low)
 
-    NimBLEDevice::init("tempio-hub");
-    NimBLEDevice::setMTU(512);
+    NimBLEDevice::init("tempio-hub");  // BLE 장치 이름 설정
+    NimBLEDevice::setMTU(512);          // 한 번에 보낼 수 있는 최대 바이트 (기본 23)
 
     auto* pScan = NimBLEDevice::getScan();
-    pScan->setScanCallbacks(&scanCb);
-    pScan->setActiveScan(true);
-    pScan->setInterval(100);
-    pScan->setWindow(99);
-    pScan->start(0, false);
+    pScan->setScanCallbacks(&scanCb);   // 장치 발견 시 ScanCB::onResult() 호출
+    pScan->setActiveScan(true);         // active scan: 더 많은 정보를 요청 (느리지만 정확)
+    pScan->setInterval(100);            // 스캔 간격 (단위: 0.625ms → 100 = 62.5ms)
+    pScan->setWindow(99);               // 실제 스캔 시간 (interval에 가까울수록 꼼꼼)
+    pScan->start(0, false);             // 0 = 무한 스캔, false = 중복 콜백 허용
 }
 
+// loop()에서 반복 호출. 매 프레임의 BLE 처리를 4단계로 수행.
 void ble_central_loop() {
-    // 끊김 후 재스캔 요청 처리 (콜백에서 위임받음)
+    // 1단계: 끊긴 클라이언트 메모리 해제 (NimBLE 풀 반환)
+    cleanupDisconnected();
+
+    // 2단계: disconnect 콜백이 재스캔을 요청했으면 스캔 재시작
     if (doScan) {
         doScan = false;
         NimBLEDevice::getScan()->start(0, false);
     }
 
-    if (doConnect) {
-        doConnect = false;
-        if (connectToServer()) {
-            delay(1000);
-            AssignId cmd;
-            cmd.node_id = 1; // TODO: 동적 ID 부여
-            sendCommand(&cmd, sizeof(cmd));
-            Serial.println("<< ASSIGN_ID: 1");
-        } else {
-            NimBLEDevice::getScan()->start(0, false);
+    // 3단계: pending 큐에서 주소를 하나 꺼내 연결 시도
+    // 한 루프에 하나만 — connect()가 blocking이라 여러 개 하면 멈춤
+    if (pendingCount > 0) {
+        // 큐 맨 앞 꺼내기 (pop front — 배열이라 뒤를 앞으로 당김)
+        NimBLEAddress addr = pendingAddrs[0];
+        for (int i = 1; i < pendingCount; i++) {
+            pendingAddrs[i - 1] = pendingAddrs[i];
         }
+        pendingCount--;
+
+        NimBLEDevice::getScan()->stop();  // 연결 중에는 스캔 못 함 (NimBLE 제약)
+
+        connectToNode(addr);
+
+        NimBLEDevice::getScan()->start(0, false);  // 성공/실패 무관 스캔 재시작
     }
 
-    if (!connected && millis() - lastPrint > 5000) {
+    // 4단계: 시리얼 상태 출력 (5초마다)
+    if (millis() - lastPrint > 5000) {
         lastPrint = millis();
-        Serial.println("scanning...");
+        int count = activeCount();
+        if (count == 0) {
+            Serial.println("scanning...");
+        } else {
+            Serial.printf("nodes: %d connected\n", count);
+        }
     }
 }
 
-bool ble_is_connected() {
-    return connected;
+// 현재 연결된 노드 수
+int ble_connected_count() {
+    return activeCount();
+}
+
+// 특정 노드에 명령 전송. nodeId로 슬롯 찾고 CONFIG 특성에 write.
+// 예: SET_INTERVAL, RESET_NODE 등을 서버→허브→노드로 내릴 때 사용.
+bool ble_send_to_node(uint8_t nodeId, const void* data, size_t len) {
+    int slot = findSlotByNodeId(nodeId);
+    if (slot < 0 || !nodes[slot].configChar) return false;
+
+    nodes[slot].configChar->writeValue(
+        reinterpret_cast<const uint8_t*>(data), len);
+    return true;
 }

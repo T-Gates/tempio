@@ -1,18 +1,20 @@
-// #pragma once = 이 헤더 파일이 여러 번 include 되어도 한 번만 처리하라는 지시.
-// 없으면 같은 선언이 중복돼서 컴파일 에러남
 #pragma once
+#include <stdint.h>
 
-// BLE Central — 센서노드/IR노드 스캔·연결·데이터 수신
-//
-// [완료] TEMPIO UUID로 센서노드 스캔 → 연결 → DATA notify 수신
-// [완료] CONFIG 특성으로 ASSIGN_ID 전송
-// [TODO] 다중 노드 동시 연결 (현재 1대만)
-// [TODO] WiFi + 서버 연동 (Phase 3)
-// [TODO] SCD40 CO2 센서 (Phase 4)
-
-// BLE Central 초기화. 스캔 시작, 콜백 등록 등. setup()에서 한 번만 호출
+// BLE Central 초기화.
+// NimBLE 스택 시작 + 스캔 콜백 등록 + 스캔 시작.
+// setup()에서 한 번만 호출.
 void ble_central_init();
-// BLE Central 매 프레임 처리. 연결 시도, 상태 출력 등. loop()에서 반복 호출
+
+// BLE Central 매 프레임 처리.
+// 끊긴 클라이언트 정리, 재스캔, 대기 중인 노드 연결을 순서대로 처리.
+// loop()에서 반복 호출.
 void ble_central_loop();
-// 현재 센서노드와 BLE 연결되어 있는지 여부를 반환. true = 연결됨
-bool ble_is_connected();
+
+// 현재 연결된 노드 수 반환.
+int ble_connected_count();
+
+// 특정 노드에 명령 전송.
+// nodeId로 대상 지정, CONFIG 특성에 write.
+// 성공 true, 실패(미연결/노드 없음) false.
+bool ble_send_to_node(uint8_t nodeId, const void* data, size_t len);
