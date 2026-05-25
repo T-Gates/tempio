@@ -21,7 +21,7 @@ ESP32-C3 2대로 BLE Central↔Peripheral 연결 확인. 하드웨어 센서 없
 
 - [x] 센서노드: 1분 딥슬립 → wake-up → BLE 연결 → 데이터 전송 → 슬립
 - [x] 허브: 노드 wake-up 시 자동 재연결 처리
-- [x] NVS에 node_id 저장 (딥슬립 후에도 유지) — NodeState 클래스
+- [x] NVS에 sleep_interval 저장 (딥슬립 후에도 유지) — NodeState 클래스
 - [ ] 전류 측정 (멀티미터로 슬립 중 전류 확인)
 
 검증: 코드 구현 완료, 실기 플래시 테스트 미완
@@ -33,23 +33,35 @@ ESP32-C3 2대로 BLE Central↔Peripheral 연결 확인. 하드웨어 센서 없
 - [x] 허브: ConnectedNode 배열(MAX_NODES=5)로 다중 연결 관리
 - [x] 스캔 콜백에서 이미 연결된 주소 건너뛰기
 - [x] 연결 후에도 스캔 계속 (새 노드 탐색) — pending 큐 패턴
-- [x] 노드별 ID 동적 부여 + 관리
-- [ ] nextNodeId NVS 영구 저장 (재부팅 시 ID 충돌 방지)
+- [x] 노드 식별: BLE MAC 주소 사용 (별도 ID 부여 불필요)
 
 검증: 코드 구현 완료, 실기 다중 연결 테스트 미완
 
 ## Phase 4 — 허브 WiFi + 서버 연동
 
-허브 보드(ESP32-S3)에서 WiFi + HTTP POST. BLE Central 기능과 통합.
+허브 보드(ESP32-S3)에서 WiFi + HTTP. BLE Central 기능과 통합.
+피기백 방식: 허브가 POST할 때 서버 응답에 명령을 실어 보냄. 나중에 즉시 제어 필요하면 MQTT로 교체.
 
 - [ ] ESP32-S3로 Central 코드 포팅 (C3→S3 차이 처리)
-- [ ] WiFi 연결 + HTTP POST `/api/hub/{hub_id}/report`
+- [ ] 허브: WiFi 연결 + HTTP POST `/api/hub/{hub_id}/report`
 - [ ] BLE로 받은 센서노드 데이터를 서버에 업로드
-- [ ] 서버 응답의 `commands` 배열 파싱
+- [ ] 서버 응답의 `commands` 배열 파싱 → BLE로 노드에 전달
 
-검증: 테스트 서버 대시보드에서 실시간 데이터 확인
+검증: 테스트 서버 대시보드에서 실시간 데이터 확인 + 명령 피기백 수신 확인
 
-## Phase 5 — 허브 SCD40 (CO2)
+## Phase 5 — E2E 제어 검증
+
+서버에서 명령 → 허브 → IR노드 → 에어컨까지 전체 경로 지연 측정.
+피기백 지연(리포트 주기)이 허용 범위인지 판정. 안 되면 MQTT 전환.
+
+- [ ] 피기백 지연 실측: 서버에서 명령 생성 → 허브가 다음 POST로 수신까지 시간
+- [ ] 허브 → BLE → IR노드 전달까지 지연 측정
+- [ ] E2E 목표: 명령 발행 후 리포트 주기 + 5초 이내 IR 발사
+- [ ] 판정: 지연 허용 가능 → 피기백 유지 / 불가 → MQTT 전환
+
+검증: 서버 대시보드 버튼 → IR 발사까지 E2E 타임스탬프 확인
+
+## Phase 6 — 허브 SCD40 (CO2)
 
 허브에 SCD40 센서 연결, CO2 + 기준 온습도 측정.
 
@@ -59,7 +71,7 @@ ESP32-C3 2대로 BLE Central↔Peripheral 연결 확인. 하드웨어 센서 없
 
 검증: 대시보드에서 CO2 값 + 센서노드 온습도 동시 표시
 
-## Phase 6 — IR노드 기본
+## Phase 7 — IR노드 기본
 
 IR노드(ESP32-C3) BLE Peripheral + IR 발사.
 
@@ -70,17 +82,6 @@ IR노드(ESP32-C3) BLE Peripheral + IR 발사.
 - [ ] 발사 결과 보고 (성공/실패)
 
 검증: VS1838B IR 수신기로 신호 확인, 또는 실제 에어컨 반응 확인
-
-## Phase 7 — 서버 능동 제어
-
-피기백(허브가 POST할 때 응답에 명령 실어보내기)만으로 충분한지, 서버→허브 push가 필요한지 검증.
-
-- [ ] 피기백 지연 측정: 서버에서 명령 생성 → 허브가 다음 POST로 수신까지 실제 지연 시간
-- [ ] WebSocket 테스트: 서버→허브 즉시 push (HTTP 기반, 추가 인프라 불필요)
-- [ ] MQTT 테스트: 브로커(Mosquitto) 띄우고 서버→허브 pub/sub
-- [ ] 판정: 피기백으로 충분하면 유지, 즉시 제어가 필요하면 WebSocket 또는 MQTT 채택
-
-검증: 서버 대시보드에서 "26도 냉방" 버튼 누르기 → IR노드가 에어컨에 IR 발사까지 E2E 지연 측정
 
 ## Phase 8 — 센서노드 실제 센서 연결
 
