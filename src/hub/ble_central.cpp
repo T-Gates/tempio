@@ -150,14 +150,34 @@ static void onDataNotify(NimBLERemoteCharacteristic* c,
 
     switch (type) {
         case MsgType::NODE_INFO: {
-            // 센서노드의 자기소개: 타입, 배터리, 펌웨어 버전
+            // 센서노드의 자기소개: 타입, ID, 배터리, 펌웨어 버전
             if (len < sizeof(NodeInfo)) break;
             NodeInfo ni;
-            memcpy(&ni, data, sizeof(ni));  // 바이트 배열 → 구조체로 복사
+            memcpy(&ni, data, sizeof(ni));
+
+            if (slot >= 0) {
+                nodes[slot].nodeType = ni.node_type;
+
+                if (ni.node_id == 0) {
+                    // 신규 노드 → 새 ID 부여
+                    nodes[slot].nodeId = nextNodeId++;
+                    AssignId cmd;
+                    cmd.node_id = nodes[slot].nodeId;
+                    if (nodes[slot].configChar) {
+                        nodes[slot].configChar->writeValue(
+                            reinterpret_cast<const uint8_t*>(&cmd), sizeof(cmd));
+                    }
+                    Serial.printf("<< ASSIGN_ID: %u → node\n", nodes[slot].nodeId);
+                } else {
+                    // 기존 노드 → ID 그대로 인식
+                    nodes[slot].nodeId = ni.node_id;
+                }
+            }
+
             const char* typeName = (ni.node_type == NodeType::SENSOR) ? "sensor" : "ir";
+            uint8_t finalId = (slot >= 0) ? nodes[slot].nodeId : ni.node_id;
             Serial.printf(">> [node %u] NodeInfo: type=%s bat=%umV fw=%u.%u\n",
-                          srcId, typeName, ni.battery_mv, ni.fw_major, ni.fw_minor);
-            if (slot >= 0) nodes[slot].nodeType = ni.node_type;
+                          finalId, typeName, ni.battery_mv, ni.fw_major, ni.fw_minor);
             break;
         }
         case MsgType::SENSOR_DATA: {
@@ -243,8 +263,8 @@ static ClientCB clientCb;  // 클라이언트 콜백 인스턴스
 //   2) 상대 주소로 BLE 연결 (connect — blocking, 수초 걸릴 수 있음)
 //   3) 서비스 탐색 (getService) — "tempio 서비스 있냐?" 물어보는 것
 //   4) DATA 특성 구독 (subscribe) — "너가 notify 보내면 나한테 알려줘"
-//   5) 슬롯에 정보 저장
-//   6) ASSIGN_ID 전송 — "너 이제부터 3번이야" (센서는 이걸 받아야 데이터를 보냄)
+//   5) 슬롯에 저장 (nodeId는 아직 0 — NODE_INFO 수신 후 결정)
+//   6) HUB_READY 전송 — "나 준비됐어, 너 누구야?"
 
 static bool connectToNode(const NimBLEAddress& addr) {
     int slot = findEmptySlot();
@@ -288,23 +308,21 @@ static bool connectToNode(const NimBLEAddress& addr) {
         return false;
     }
 
-    // 5) 슬롯에 저장
+    // 5) 슬롯에 저장 — nodeId는 0으로 둠. NODE_INFO 수신 후 확정.
     nodes[slot].client     = client;
     nodes[slot].configChar = svc->getCharacteristic(TEMPIO_CHAR_CONFIG_UUID);
     nodes[slot].addr       = addr;
-    nodes[slot].nodeId     = nextNodeId++;  // ID 부여 후 1 증가
+    nodes[slot].nodeId     = 0;
     nodes[slot].used       = true;
 
-    // 6) ASSIGN_ID 전송 — 센서노드는 이걸 받아야 "허브 준비 완료"로 인식
-    delay(200);  // subscribe 완료 보장용 짧은 대기
-    AssignId cmd;
-    cmd.node_id = nodes[slot].nodeId;
+    // 6) HUB_READY 전송 — "subscribe 끝남, 너 누구야?"
+    delay(200);
+    HubReady ready;
     if (nodes[slot].configChar) {
         nodes[slot].configChar->writeValue(
-            reinterpret_cast<const uint8_t*>(&cmd), sizeof(cmd));
+            reinterpret_cast<const uint8_t*>(&ready), sizeof(ready));
     }
-    Serial.printf("<< ASSIGN_ID: %u → %s\n",
-                  nodes[slot].nodeId, addr.toString().c_str());
+    Serial.printf("<< HUB_READY → %s\n", addr.toString().c_str());
 
     digitalWrite(LED_PIN, LOW);  // 연결 성공 → LED 켜기
     return true;

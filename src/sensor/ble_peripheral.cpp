@@ -17,7 +17,8 @@ static NodeState state;
 static NimBLECharacteristic* pDataChar   = nullptr;
 static NimBLECharacteristic* pConfigChar = nullptr;
 static volatile bool     deviceConnected = false;
-static volatile bool     configReceived  = false;
+static volatile bool     hubReady        = false;  // HUB_READY 수신 플래그
+static volatile bool     configReceived  = false;  // ASSIGN_ID 등 후속 명령 수신 플래그
 static volatile uint16_t hubConnHandle   = 0;
 
 // ══════════════════════════════════════════════════════════════════════
@@ -47,6 +48,11 @@ class ConfigCB : public NimBLECharacteristicCallbacks {
         auto type = static_cast<MsgType>(val[0]);
 
         switch (type) {
+            case MsgType::HUB_READY: {
+                Serial.println(">> hub ready");
+                hubReady = true;
+                break;
+            }
             case MsgType::ASSIGN_ID: {
                 if (val.length() >= sizeof(AssignId)) {
                     AssignId cmd;
@@ -54,6 +60,7 @@ class ConfigCB : public NimBLECharacteristicCallbacks {
                     state.setNodeId(cmd.node_id);
                     Serial.printf(">> assigned id: %u\n", cmd.node_id);
                 }
+                configReceived = true;
                 break;
             }
             case MsgType::SET_INTERVAL: {
@@ -63,6 +70,7 @@ class ConfigCB : public NimBLECharacteristicCallbacks {
                     state.setSleepInterval(cmd.interval_sec);
                     Serial.printf(">> interval: %u sec\n", state.sleepInterval());
                 }
+                configReceived = true;
                 break;
             }
             case MsgType::RESET_NODE: {
@@ -79,8 +87,6 @@ class ConfigCB : public NimBLECharacteristicCallbacks {
             default:
                 Serial.printf(">> unknown config: 0x%02x\n", val[0]);
         }
-
-        configReceived = true;
     }
 };
 
@@ -129,6 +135,16 @@ void ble_peripheral_init() {
 bool ble_wait_connect(uint32_t timeout_ms) {
     unsigned long start = millis();
     while (!deviceConnected) {
+        if (millis() - start >= timeout_ms) return false;
+        delay(10);
+    }
+    return true;
+}
+
+bool ble_wait_hub_ready(uint32_t timeout_ms) {
+    unsigned long start = millis();
+    while (!hubReady) {
+        if (!deviceConnected) return false;
         if (millis() - start >= timeout_ms) return false;
         delay(10);
     }
@@ -190,6 +206,10 @@ void ble_disconnect() {
 
 bool ble_is_connected() {
     return deviceConnected;
+}
+
+uint8_t ble_get_node_id() {
+    return state.nodeId();
 }
 
 uint16_t ble_get_sleep_interval() {

@@ -1,7 +1,8 @@
 // 센서노드 — 딥슬립 one-shot 패턴
 //
-// wake → BLE 초기화 → 허브 연결 대기 → 허브 준비 대기(ASSIGN_ID 수신) →
-// 데이터 전송 → 추가 명령 대기 → disconnect → 딥슬립 → (반복)
+// wake → BLE 초기화 → 허브 연결 대기 → HUB_READY 대기 →
+// NODE_INFO 전송 (id=0이면 ASSIGN_ID 수신 대기) →
+// 센서 데이터 전송 → 추가 명령 대기 → disconnect → 딥슬립
 
 #include <Arduino.h>
 #include <esp_sleep.h>
@@ -14,16 +15,20 @@ void setup() {
     ble_peripheral_init();
 
     if (ble_wait_connect(5000)) {
-        // 허브가 서비스 탐색 + 구독 + ASSIGN_ID 전송을 완료할 때까지 대기.
-        // ASSIGN_ID가 도착하면 허브의 subscribe가 끝났다는 뜻 → 데이터 전송 안전.
-        ble_wait_config(3000);
+        if (ble_wait_hub_ready(3000)) {
+            ble_send_node_info();
 
-        ble_send_node_info();
-        delay(100);
-        ble_send_sensor_data();
+            // 신규 노드(id=0)면 허브가 ASSIGN_ID를 보내줄 때까지 대기
+            if (ble_get_node_id() == 0) {
+                ble_wait_config(3000);
+            }
 
-        // 추가 명령(SET_INTERVAL 등) 수신 여유
-        delay(500);
+            delay(100);
+            ble_send_sensor_data();
+
+            // 추가 명령(SET_INTERVAL 등) 수신 여유
+            delay(500);
+        }
     } else {
         Serial.println("no hub, sleeping");
     }

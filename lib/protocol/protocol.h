@@ -26,9 +26,10 @@ enum class MsgType : uint8_t {
     SENSOR_DATA    = 0x01,  // 센서노드 → 허브: 온습도 + 조도 + 배터리
     IR_TIMING      = 0x02,  // 허브 → IR노드: raw IR 타이밍 배열
 
-    ASSIGN_ID      = 0x10,  // 허브 → 노드: 노드 ID 부여 (페어링 시)
-    SET_INTERVAL   = 0x11,  // 허브 → 센서노드: 측정 주기 변경 (초 단위)
-    RESET_NODE     = 0x12,  // 허브 → 노드: 리셋 명령 (레벨별)
+    HUB_READY      = 0x10,  // 허브 → 노드: "subscribe 완료, 너 누구야?" (연결 직후)
+    ASSIGN_ID      = 0x11,  // 허브 → 노드: 노드 ID 부여 (신규 노드에만)
+    SET_INTERVAL   = 0x12,  // 허브 → 센서노드: 측정 주기 변경 (초 단위)
+    RESET_NODE     = 0x13,  // 허브 → 노드: 리셋 명령 (레벨별)
 
     NODE_INFO      = 0x20,  // 노드 → 허브: 연결 직후 자기 소개 (타입, ID, 배터리, 펌웨어)
 };
@@ -82,8 +83,15 @@ struct NodeInfo {
 
 // ──────────── 설정 명령 ────────────
 
+// 허브 → 노드: subscribe 완료 신호 (1바이트)
+// 허브가 서비스 탐색 + DATA 구독을 끝낸 뒤 전송.
+// 노드는 이걸 받으면 NODE_INFO를 보내도 안전하다는 뜻.
+struct HubReady {
+    MsgType type = MsgType::HUB_READY;
+} __attribute__((packed));
+
 // 허브 → 노드: 노드 ID 부여 (2바이트)
-// 신규 노드(node_id=0)가 연결되면 허브가 ID를 발급해서 이걸로 전송.
+// 신규 노드(node_id=0)가 NODE_INFO로 id=0을 보내면 허브가 새 ID를 발급.
 // 노드는 NVS에 저장해서 다음 부팅에도 유지.
 struct AssignId {
     MsgType type = MsgType::ASSIGN_ID;
