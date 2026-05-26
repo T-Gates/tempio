@@ -117,16 +117,26 @@ static int activeCount() {
     return count;
 }
 
-// 끊긴 슬롯을 정리하고 NimBLE 내부 풀에서도 클라이언트를 제거한다.
-// 메인 루프에서 호출되므로 deleteClient 안전. (콜백 안에서는 heap 크래시 위험)
+// 끊긴 슬롯의 configChar만 정리. client 객체는 유지해서 재사용.
+// deleteClient()는 NimBLE 2.5.0에서 heap 크래시를 일으키므로 쓰지 않는다.
 static void cleanupDisconnected() {
     for (int i = 0; i < MAX_NODES; i++) {
         if (!nodes[i].used && nodes[i].client) {
-            NimBLEDevice::deleteClient(nodes[i].client);
-            nodes[i].client = nullptr;
             nodes[i].configChar = nullptr;
         }
     }
+}
+
+// 기존 끊긴 클라이언트 객체를 찾아 반환. 없으면 nullptr.
+static NimBLEClient* findReusableClient() {
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (!nodes[i].used && nodes[i].client) {
+            NimBLEClient* c = nodes[i].client;
+            nodes[i].client = nullptr;
+            return c;
+        }
+    }
+    return nullptr;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -265,12 +275,11 @@ static bool connectToNode(const NimBLEAddress& addr) {
         return false;
     }
 
-    // 1) BLE 클라이언트 생성 — NimBLE 내부 풀에서 하나 꺼내옴
-    Serial.printf("[DEBUG] active=%d  max=%d  central=%d\n",
-                  activeCount(),
-                  CONFIG_BT_NIMBLE_MAX_CONNECTIONS,
-                  CONFIG_BT_NIMBLE_ROLE_CENTRAL);
-    auto* client = NimBLEDevice::createClient();
+    // 1) 끊긴 클라이언트 재사용 시도 → 없으면 새로 생성
+    auto* client = findReusableClient();
+    if (!client) {
+        client = NimBLEDevice::createClient();
+    }
     if (!client) {
         Serial.println("createClient failed");
         return false;
