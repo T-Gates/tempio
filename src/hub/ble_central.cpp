@@ -26,7 +26,14 @@
 #include "protocol.h"         // 우리 프로토콜: UUID, MsgType, 패킷 구조체들
 #include "ble_central.h"
 
-static constexpr uint8_t LED_PIN = 8;  // C3 내장 LED (active-low: LOW=켜짐)
+// C3=GPIO8(active-low), ESP32=GPIO2(active-high)
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+static constexpr uint8_t LED_PIN = 8;
+static constexpr bool LED_ON = LOW;
+#else
+static constexpr uint8_t LED_PIN = 2;
+static constexpr bool LED_ON = HIGH;
+#endif
 
 // ──────────── 다중 연결 관리 ────────────
 
@@ -231,7 +238,7 @@ class ClientCB : public NimBLEClientCallbacks {
             nodes[slot].configChar = nullptr;
         }
         // LED: 연결된 노드가 하나라도 있으면 켜짐, 없으면 꺼짐
-        digitalWrite(LED_PIN, activeCount() > 0 ? LOW : HIGH);
+        digitalWrite(LED_PIN, activeCount() > 0 ? LED_ON : !LED_ON);
         doScan = true;  // 다음 loop()에서 스캔 재시작
     }
 };
@@ -312,7 +319,7 @@ static bool connectToNode(const NimBLEAddress& addr) {
     }
     Serial.printf("<< HUB_READY → %s\n", addr.toString().c_str());
 
-    digitalWrite(LED_PIN, LOW);  // 연결 성공 → LED 켜기
+    digitalWrite(LED_PIN, LED_ON);  // 연결 성공 → LED 켜기
     return true;
 }
 
@@ -323,7 +330,7 @@ static bool connectToNode(const NimBLEAddress& addr) {
 // setup()에서 한 번 호출. BLE 스택 초기화 + 스캔 시작.
 void ble_central_init() {
     pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, HIGH);   // LED 끔 (active-low)
+    digitalWrite(LED_PIN, !LED_ON);   // LED 끔
 
     NimBLEDevice::init("tempio-hub");  // BLE 장치 이름 설정
     NimBLEDevice::setMTU(512);          // 한 번에 보낼 수 있는 최대 바이트 (기본 23)
