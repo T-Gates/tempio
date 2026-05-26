@@ -58,6 +58,10 @@ static constexpr int PENDING_MAX = 8;
 static NimBLEAddress pendingAddrs[PENDING_MAX];  // 대기 중인 주소 배열
 static int pendingCount = 0;                      // 현재 대기 수
 
+// ──────────── 센서 데이터 공유 버퍼 ────────────
+static SensorReport pendingReport;
+static volatile bool reportReady = false;
+
 // ──────────── 플래그 ────────────
 static volatile bool doScan = false;       // true면 다음 loop()에서 스캔 재시작
 static unsigned long lastPrint = 0;        // 상태 출력 타이머 (5초마다)
@@ -189,7 +193,22 @@ static void onDataNotify(NimBLERemoteCharacteristic* c,
             memcpy(&sd, data, sizeof(sd));
             Serial.printf(">> [%s] sensor: %.1f C  %.1f %%  ldr=%u  bat=%umV\n",
                           srcAddr, sd.temp, sd.humidity, sd.ldr, sd.battery_mv);
-            // TODO: 여기서 WiFi로 서버에 전송하거나 버퍼에 쌓는 로직 추가
+
+            // 공유 버퍼에 복사 — WiFi 모듈이 ble_get_pending_report()로 꺼내감
+            strncpy(pendingReport.node_id, srcAddr, sizeof(pendingReport.node_id) - 1);
+            pendingReport.node_id[sizeof(pendingReport.node_id) - 1] = '\0';
+
+            const char* typeStr = (slot >= 0 && nodes[slot].nodeType == NodeType::IR)
+                ? "ir" : "sensor";
+            strncpy(pendingReport.node_type_str, typeStr, sizeof(pendingReport.node_type_str) - 1);
+            pendingReport.node_type_str[sizeof(pendingReport.node_type_str) - 1] = '\0';
+
+            pendingReport.temperature = sd.temp;
+            pendingReport.humidity    = sd.humidity;
+            pendingReport.ldr         = sd.ldr;
+            pendingReport.battery_mv  = sd.battery_mv;
+            pendingReport.ble_rssi    = (slot >= 0) ? nodes[slot].client->getRssi() : 0;
+            reportReady = true;
             break;
         }
         default:
@@ -419,5 +438,13 @@ bool ble_send_to_node(const char* addrStr, const void* data, size_t len) {
 
     nodes[slot].configChar->writeValue(
         reinterpret_cast<const uint8_t*>(data), len);
+    return true;
+}
+
+// 가장 최근 센서 리포트를 꺼내간다. 새 데이터가 없으면 false.
+bool ble_get_pending_report(SensorReport* out) {
+    if (!reportReady) return false;
+    *out = pendingReport;
+    reportReady = false;
     return true;
 }
