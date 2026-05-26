@@ -1,5 +1,7 @@
+// BLE Central — 주변 센서노드 스캔 및 데이터 수신
 #pragma once
 #include <stdint.h>
+#include "../dto/sensor_report.h"
 
 // BLE Central 초기화.
 // NimBLE 스택 시작 + 스캔 콜백 등록 + 스캔 시작.
@@ -18,18 +20,6 @@ int ble_connected_count();
 // MAC 주소 문자열("AA:BB:CC:DD:EE:FF")로 대상 지정, CONFIG 특성에 write.
 // 성공 true, 실패(미연결/노드 없음) false.
 bool ble_send_to_node(const char* addrStr, const void* data, size_t len);
-
-// ──────────── 센서 데이터 공유 버퍼 ────────────
-
-struct SensorReport {
-    char node_id[18];       // MAC 주소 문자열 "aa:bb:cc:dd:ee:ff"
-    char node_type_str[8];  // "sensor" or "ir"
-    float temperature;
-    float humidity;
-    uint16_t ldr;
-    uint16_t battery_mv;
-    int8_t ble_rssi;
-};
 
 // 가장 최근 센서 리포트를 꺼내간다. 새 데이터가 없으면 false.
 bool ble_get_pending_report(SensorReport* out);
