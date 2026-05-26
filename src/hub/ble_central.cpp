@@ -117,12 +117,12 @@ static int activeCount() {
     return count;
 }
 
-// 끊긴 슬롯의 참조를 정리한다.
-// 클라이언트 객체 자체는 삭제하지 않음 — NimBLE가 내부 풀에 보관하다가
-// createClient() 호출 시 끊긴 클라이언트를 자동 재활용한다.
+// 끊긴 슬롯을 정리하고 NimBLE 내부 풀에서도 클라이언트를 제거한다.
+// 메인 루프에서 호출되므로 deleteClient 안전. (콜백 안에서는 heap 크래시 위험)
 static void cleanupDisconnected() {
     for (int i = 0; i < MAX_NODES; i++) {
         if (!nodes[i].used && nodes[i].client) {
+            NimBLEDevice::deleteClient(nodes[i].client);
             nodes[i].client = nullptr;
             nodes[i].configChar = nullptr;
         }
