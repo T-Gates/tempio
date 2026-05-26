@@ -114,9 +114,9 @@ void mqtt_init(const char* broker_uri) {
     snprintf(clientId, sizeof(clientId), "tempio-hub-%s", hubId);
 
     esp_mqtt_client_config_t cfg = {};
-    cfg.broker.address.uri = broker_uri;
-    cfg.credentials.client_id = clientId;
-    cfg.buffer.size = 1024;
+    cfg.uri = broker_uri;
+    cfg.client_id = clientId;
+    cfg.buffer_size = 1024;
 
     client = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, mqttEventHandler, nullptr);
