@@ -37,29 +37,32 @@ ESP32-C3 2대로 BLE Central↔Peripheral 연결 확인. 하드웨어 센서 없
 
 검증: 코드 구현 완료, 실기 다중 연결 테스트 미완
 
-## Phase 4 — 허브 WiFi + 서버 연동
+## Phase 4 — 허브 WiFi + MQTT 서버 연동 ✅
 
-허브 보드(ESP32-S3)에서 WiFi + HTTP. BLE Central 기능과 통합.
-피기백 방식: 허브가 POST할 때 서버 응답에 명령을 실어 보냄. 나중에 즉시 제어 필요하면 MQTT로 교체.
+허브 보드(ESP32)에서 WiFi + MQTT over WSS. BLE Central 기능과 통합.
 
-- [ ] ESP32-S3로 Central 코드 포팅 (C3→S3 차이 처리)
-- [ ] 허브: WiFi 연결 + HTTP POST `/api/hub/{hub_id}/report`
-- [ ] BLE로 받은 센서노드 데이터를 서버에 업로드
-- [ ] 서버 응답의 `commands` 배열 파싱 → BLE로 노드에 전달
+- [x] WiFi 연결 + NVS 저장 + 시리얼 입력 설정
+- [x] MQTT over WSS 연결 (ESP-IDF esp_mqtt, `wss://mqtt.yuumi.wiki/mqtt`)
+- [x] GTS Root R4 인증서 임베드 (Cloudflare TLS 검증)
+- [x] BLE 센서 데이터 → MQTT publish (즉시 전송)
+- [x] 서버 MQTT 구독 → SQLite 저장
+- [x] FastAPI 헥사고널 아키텍처 리팩토링 (ports/adapters/domain)
+- [x] Docker Compose (Mosquitto + FastAPI)
+- [x] Cloudflare 터널: mqtt.yuumi.wiki (WSS) + api.yuumi.wiki (HTTP)
+- [x] E2E 검증: 센서→BLE→ESP32→WSS→Cloudflare→Mosquitto→FastAPI→SQLite
 
-검증: 테스트 서버 대시보드에서 실시간 데이터 확인 + 명령 피기백 수신 확인
+검증: E2E 관통 성공 ✅
 
-## Phase 5 — E2E 제어 검증
+## Phase 5 — 서버→허브 명령 전달 E2E
 
-서버에서 명령 → 허브 → IR노드 → 에어컨까지 전체 경로 지연 측정.
-피기백 지연(리포트 주기)이 허용 범위인지 판정. 안 되면 MQTT 전환.
+서버에서 MQTT 명령 → 허브 수신 → BLE로 노드에 전달하는 하향 경로 구현 및 검증.
 
-- [ ] 피기백 지연 실측: 서버에서 명령 생성 → 허브가 다음 POST로 수신까지 시간
-- [ ] 허브 → BLE → IR노드 전달까지 지연 측정
-- [ ] E2E 목표: 명령 발행 후 리포트 주기 + 5초 이내 IR 발사
-- [ ] 판정: 지연 허용 가능 → 피기백 유지 / 불가 → MQTT 전환
+- [ ] main.cpp에서 MQTT 명령 큐 처리 → BLE 바이너리 변환 → 노드 전달
+- [ ] SET_INTERVAL 명령 E2E 테스트 (서버 API → MQTT → 허브 → BLE → 센서노드)
+- [ ] RESET_NODE 명령 E2E 테스트
+- [ ] 명령 전달 지연 측정 (서버 publish → 허브 수신까지)
 
-검증: 서버 대시보드 버튼 → IR 발사까지 E2E 타임스탬프 확인
+검증: 서버 API 호출 → 시리얼 모니터에서 명령 수신 확인
 
 ## Phase 6 — 허브 SCD40 (CO2)
 
@@ -120,7 +123,7 @@ IR노드(ESP32-C3) BLE Peripheral + IR 발사.
 - [x] 멀티미터
 
 ### 필요
-- [ ] ESP32-S3 보드 — Phase 4 (허브용)
+- [ ] ESP32-S3 보드 — 추후 업그레이드 (선택)
 - [ ] SHT40 센서 — Phase 8 이후 교체 (센서노드용)
 - [ ] SCD40 센서 — Phase 6 (허브 CO2용)
 - [ ] LDR + 10k 저항 — Phase 8 (센서노드 조도)

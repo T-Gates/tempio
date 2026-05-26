@@ -1,22 +1,42 @@
-# 서늘 HTTP API 명세
+# tempio API 명세 (MQTT + HTTP)
 
 Base URL: `https://api.yuumi.wiki`
+MQTT Broker: `wss://mqtt.yuumi.wiki/mqtt`
 
 ---
 
-## 허브 → 서버
+## MQTT 토픽
 
-### `POST /api/hub/{hub_id}/report`
+| 방향 | 토픽 패턴 | QoS | 설명 |
+|------|-----------|-----|------|
+| 허브→서버 | `tempio/{hub_id}/report` | 0 | 센서 데이터 리포트 |
+| 서버→허브 | `tempio/{hub_id}/commands` | 0 | 노드 제어 명령 |
 
-허브가 주기적(1분)으로 센서 데이터를 서버에 업로드. 응답에 명령을 피기백.
+- `hub_id` = WiFi MAC, 콜론 제거 소문자 (예: `04b24793c230`)
+- 서버는 `tempio/+/report`를 구독하여 자동 처리
 
-**Path Parameters**
+---
 
-| 이름 | 타입 | 설명 |
-|------|------|------|
-| `hub_id` | string | 허브 식별자 (BLE MAC 주소) |
+## 인프라
 
-**Request Body**
+| 구성요소 | 주소 | 비고 |
+|----------|------|------|
+| Mosquitto 브로커 (TCP) | `localhost:1883` | 로컬 전용 |
+| Mosquitto 브로커 (WebSocket) | `localhost:9001` | 외부 연결용 |
+| Cloudflare 터널 (MQTT) | `mqtt.yuumi.wiki` → `localhost:9001` | ESP32 WSS 접속 |
+| Cloudflare 터널 (HTTP) | `api.yuumi.wiki` → `localhost:8000` | 대시보드·API |
+
+ESP32 허브는 WSS로 연결: `wss://mqtt.yuumi.wiki/mqtt`
+
+---
+
+## 허브 → 서버 (MQTT)
+
+### 토픽: `tempio/{hub_id}/report`
+
+허브가 주기적(1분)으로 센서 데이터를 MQTT로 퍼블리시. 서버가 구독하여 자동 수신·저장.
+
+**Payload (JSON)**
 
 ```json
 {
@@ -74,23 +94,33 @@ Base URL: `https://api.yuumi.wiki`
 | `humidity` | float | Y | 습도 (%) |
 | `lux` | float? | N | 조도 (lux) |
 
-**Response `200 OK`**
+---
+
+## 서버 → 허브 (HTTP → MQTT)
+
+### `POST /api/hub/{hub_id}/command`
+
+서버가 허브에 즉시 명령을 전달. HTTP로 요청을 받아 MQTT 토픽 `tempio/{hub_id}/commands`로 퍼블리시.
+
+**Path Parameters**
+
+| 이름 | 타입 | 설명 |
+|------|------|------|
+| `hub_id` | string | 허브 식별자 (WiFi MAC, 콜론 제거 소문자) |
+
+**Headers**
+
+| 이름 | 필수 | 설명 |
+|------|------|------|
+| `X-API-Key` | Y* | API 키 (`TEMPIO_API_KEY` 미설정 시 인증 비활성화) |
+
+**Request Body**
 
 ```json
 {
-  "status": "ok",
-  "commands": [
-    {
-      "target": "aa:bb:cc:dd:ee:02",
-      "type": "SET_INTERVAL",
-      "payload": { "interval_sec": 1800 }
-    },
-    {
-      "target": "aa:bb:cc:dd:ee:03",
-      "type": "IR_TIMING",
-      "payload": { "timings": [4500, 4500, 560, 1690, ...] }
-    }
-  ]
+  "target": "aa:bb:cc:dd:ee:02",
+  "type": "SET_INTERVAL",
+  "payload": { "interval_sec": 1800 }
 }
 ```
 
@@ -102,9 +132,22 @@ Base URL: `https://api.yuumi.wiki`
 | `IR_TIMING` | IR노드 MAC | `{ "timings": int[] }` | IR raw 타이밍 (μs) 발사 |
 | `RESET_NODE` | 노드 MAC | `{ "level": int }` | 0=재부팅, 1=페어링삭제, 2=공장초기화 |
 
+**Response `200 OK`**
+
+```json
+{
+  "status": "ok",
+  "detail": "Command published to tempio/04b24793c230/commands"
+}
+```
+
 ---
 
-## 조회 (대시보드·디버그용)
+## 조회 (대시보드·디버그용) — HTTP
+
+### `GET /`
+
+실시간 대시보드 (HTML, Jinja2). 5초 자동 새로고침, Chart.js 온습도 추이 차트.
 
 ### `GET /api/hub-history`
 
@@ -118,25 +161,23 @@ Base URL: `https://api.yuumi.wiki`
 
 **Response**: `SensorReading[]` (hub_id, timestamp 포함)
 
-### `GET /`
-
-실시간 대시보드 (HTML). 5초 자동 새로고침, Chart.js 온습도 추이 차트.
-
----
-
-## 예정 엔드포인트
-
-| Phase | 엔드포인트 | 용도 |
-|-------|-----------|------|
-| 5 | `POST /api/hub/{hub_id}/command` | 즉시 명령 전달 (피기백 지연 불가 시) |
-| 6 | — | CO2 데이터는 기존 report에 포함 |
-| 후기 | `GET /api/stores` | 매장 목록 조회 |
-| 후기 | `PUT /api/stores/{store_id}` | 매장 설정 (영업시간 등) |
-| 후기 | `POST /api/hub/{hub_id}/ota` | OTA 펌웨어 업데이트 트리거 |
-
 ---
 
 ## 인증
 
-현재: 없음 (테스트 단계)
-계획: API key 헤더 (`X-API-Key`) — 허브 펌웨어에 하드코딩 or NVS 저장
+API 키 방식 (`X-API-Key` 헤더). 서버는 `hmac.compare_digest`로 검증.
+
+- 환경변수 `TEMPIO_API_KEY`로 키 설정
+- `TEMPIO_API_KEY` 미설정 시 인증 비활성화 (개발 모드)
+- 허브 펌웨어에는 NVS 또는 하드코딩으로 저장
+
+---
+
+## 예정 기능
+
+| Phase | 내용 | 비고 |
+|-------|------|------|
+| 6 | CO2 데이터 | 기존 report payload에 포함 (필드 이미 존재) |
+| 후기 | `GET /api/stores` | 매장 목록 조회 |
+| 후기 | `PUT /api/stores/{store_id}` | 매장 설정 (영업시간 등) |
+| 후기 | `POST /api/hub/{hub_id}/ota` | OTA 펌웨어 업데이트 트리거 |

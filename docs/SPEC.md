@@ -20,9 +20,9 @@
 |------|------|------|------|------|
 | `0x01` | SENSOR_DATA | 센서노드 → 허브 | DATA (notify) | 온습도 + 조도 + 배터리 |
 | `0x02` | IR_TIMING | 허브 → IR노드 | DATA (write) | raw IR 타이밍 배열 |
-| `0x10` | ASSIGN_ID | 허브 → 노드 | CONFIG | 노드 ID 부여 |
-| `0x11` | SET_INTERVAL | 허브 → 센서노드 | CONFIG | 측정 주기 변경 (초) |
-| `0x12` | RESET_NODE | 허브 → 노드 | CONFIG | 리셋 (레벨별) |
+| `0x10` | HUB_READY | 허브 → 노드 | CONFIG | subscribe 완료 신호 ("데이터 보내도 돼") |
+| `0x12` | SET_INTERVAL | 허브 → 센서노드 | CONFIG | 측정 주기 변경 (초) |
+| `0x13` | RESET_NODE | 허브 → 노드 | CONFIG | 리셋 (레벨별) |
 | `0x20` | NODE_INFO | 노드 → 허브 | DATA (notify) | 연결 직후 자기 소개 |
 
 ### 데이터 구조체
@@ -39,16 +39,17 @@
 | 9 | 2 | ldr | 조도 raw ADC (0~4095) |
 | 11 | 2 | battery_mv | 배터리 전압 (mV) |
 
-**NodeInfo (7바이트)**
+**NodeInfo (6바이트)**
 
 | 오프셋 | 크기 | 필드 | 설명 |
 |--------|------|------|------|
 | 0 | 1 | type | `0x20` |
 | 1 | 1 | node_type | `0x01`=센서, `0x02`=IR |
-| 2 | 1 | node_id | 허브 부여 ID (0=미할당) |
-| 3 | 2 | battery_mv | 배터리 전압 (mV) |
-| 5 | 1 | fw_major | 펌웨어 버전 major |
-| 6 | 1 | fw_minor | 펌웨어 버전 minor |
+| 2 | 2 | battery_mv | 배터리 전압 (mV) |
+| 4 | 1 | fw_major | 펌웨어 버전 major |
+| 5 | 1 | fw_minor | 펌웨어 버전 minor |
+
+노드 식별은 BLE MAC 주소로 — 별도 ID 부여 불필요.
 
 **IR_TIMING (가변 길이)**
 
@@ -60,15 +61,15 @@
 
 예: 삼성 냉방 26도 → count=199, 총 401바이트.
 
-**AssignId (2바이트)**: `[0x10, node_id]`
-**SetInterval (3바이트)**: `[0x11, interval_sec(2)]` — 기본 60초, 범위 10~3600
-**ResetNode (2바이트)**: `[0x12, level]` — 0=재부팅, 1=페어링 삭제, 2=공장 초기화
+**HubReady (1바이트)**: `[0x10]` — 허브가 서비스 탐색 + DATA 구독 완료 후 전송. 노드는 이걸 받으면 NODE_INFO를 보내도 안전.
+**SetInterval (3바이트)**: `[0x12, interval_sec(2)]` — 기본 60초, 범위 10~3600
+**ResetNode (2바이트)**: `[0x13, level]` — 0=재부팅, 1=페어링 삭제, 2=공장 초기화
 
 ### MTU
 
 ESP32끼리 통신이므로 MTU 512바이트 협상. IR 타이밍 최대 ~600바이트도 한 번에 전송 가능. 패킷 분할 불필요.
 
-Central(허브) 측에서 연결 후 `requestMTU(512)` 호출.
+Central(허브) 측에서 `NimBLEDevice::setMTU(512)` 호출.
 
 ---
 
@@ -81,13 +82,13 @@ Central(허브) 측에서 연결 후 `requestMTU(512)` 호출.
 ```
 [부팅]
   WiFi 연결 (NVS에서 SSID/PW 로드, 최대 10초)
-  ├── 성공 → MQTT 브로커 연결 + subscribe
+  ├── 성공 → MQTT 브로커 연결 (WSS)
   └── 실패 → BLE만 동작, 시리얼에서 wifi set 대기
   BLE 스캔 시작 (WiFi 성공/실패 무관)
 
 [메인 루프]
   BLE 처리 (스캔, 연결, 데이터 수신)
-  MQTT keepalive + 재연결
+  MQTT WiFi 상태 감지 (연결 시 start, 끊김 시 stop)
   새 센서 데이터 → MQTT publish (즉시)
   서버 명령 수신 → BLE로 해당 노드에 전달
 ```
@@ -101,9 +102,10 @@ AA 건전지 구동. 대부분 딥슬립.
 ```
 [딥슬립] → 1분 타이머 (서버에서 변경 가능)
 [wake-up]
-  BLE peripheral 광고
-  허브 연결 대기
-  SHT40 + LDR + 배터리 ADC 읽기
+  BLE peripheral 광고 (TEMPIO_SERVICE_UUID)
+  허브 연결 대기 (5초 타임아웃)
+  HUB_READY 대기 (3초 타임아웃)
+  NODE_INFO notify 전송 (타입, 배터리, 펌웨어 버전)
   SensorData notify 전송
   BLE 해제 → 딥슬립
 ```
@@ -128,21 +130,22 @@ IR 발사: `ledcWrite`로 38kHz 캐리어 생성, 타이밍 배열대로 on/off 
 
 ## 연결 흐름
 
-### 최초 페어링
+### 최초 연결
 
-1. 노드 전원 ON → NODE_INFO(node_id=0) 광고
-2. 허브가 스캔 → TEMPIO_SERVICE_UUID 발견 → 연결
-3. NODE_INFO 수신 → node_id=0 확인 → 신규 노드
-4. ASSIGN_ID(node_id=N) 전송
-5. 노드가 NVS에 ID 저장
+1. 노드 전원 ON → BLE peripheral 광고 (TEMPIO_SERVICE_UUID 포함)
+2. 허브가 스캔 → TEMPIO_SERVICE_UUID 발견 → pending 큐에 주소 추가
+3. loop()에서 큐에서 주소를 꺼내 연결 시도
+4. 서비스 탐색 → DATA 특성 구독 (subscribe)
+5. 허브가 CONFIG 특성으로 HUB_READY(`0x10`) 전송
+6. 노드가 HUB_READY 수신 → NODE_INFO notify 전송 (타입, 배터리, 펌웨어 버전)
+7. 노드는 BLE MAC 주소로 식별 — 별도 ID 부여 없음
 
 ### 일상 통신
 
-1. 노드 wake-up → BLE 광고 (NODE_INFO에 할당된 ID 포함)
-2. 허브 연결 → MTU 협상(512)
-3. 센서노드: SensorData notify → 허브 수신
-4. IR노드: 허브가 대기 중인 IR_TIMING write → 노드가 IR 발사
-5. 연결 해제 → 노드 딥슬립
+1. 노드 wake-up → BLE 광고 (TEMPIO_SERVICE_UUID)
+2. 허브 연결 → MTU 협상(512) → HUB_READY 전송
+3. 노드: NODE_INFO → SensorData notify (센서노드), 또는 IR_TIMING 수신 대기 (IR노드)
+4. 연결 해제 → 노드 딥슬립
 
 ---
 
@@ -153,20 +156,27 @@ IR 발사: `ledcWrite`로 38kHz 캐리어 생성, 타이밍 배열대로 on/off 
 | 항목 | 결정 | 이유 |
 |------|------|------|
 | 프로토콜 | MQTT (Mosquitto) | 논블로킹 publish, 양방향 실시간, IoT 표준 |
+| 전송 계층 | WSS (WebSocket Secure) | Cloudflare 터널 경유에 필요. TCP 1883은 터널 불가 |
+| MQTT 라이브러리 | ESP-IDF esp_mqtt | WSS 네이티브 지원. PubSubClient는 TCP만 지원하여 교체 |
 | WiFi 설정 | NVS + 시리얼 입력 | 코드 재플래시 없이 WiFi 변경 가능 |
 | 업로드 타이밍 | BLE notify 즉시 | 센서 데이터 도착 즉시 서버 전달 |
-| BLE+WiFi 공존 | 플래그 + 메인루프 패턴 | BLE 콜백에서 직접 publish 안 함. PubSubClient가 스레드 비안전 |
-| Topic 구조 | 평면 (`seonul/{hub_id}/...`) | 허브 1대 기준. 매장 확장 시 앞에 store_id 추가 |
-| 라이브러리 | PubSubClient | 가장 인기, 예제 풍부, 안정적 |
+| BLE+WiFi 공존 | 공유 버퍼 + 플래그 + 메인루프 패턴 | BLE 콜백에서 직접 publish 안 함 |
+| Topic 구조 | 평면 (`tempio/{hub_id}/...`) | 허브 1대 기준. 매장 확장 시 앞에 store_id 추가 |
+| QoS | 0 | 현재 구현 기준. 센서 데이터는 주기적이므로 유실 허용 |
 
 ### 허브 파일 구조
 
 ```
 firmware/src/hub/
-├── main.cpp            오케스트레이터 (setup/loop)
-├── ble_central.cpp/h   BLE 스캔·연결·수신 (기존 + 버퍼 추가)
-├── wifi_manager.cpp/h  WiFi 연결 + NVS SSID/PW 관리
-└── mqtt_client.cpp/h   MQTT 연결·publish·subscribe·명령 파싱
+├── config.h              설정값 (MQTT 브로커 URI, 루프 주기)
+├── main.cpp              오케스트레이터 (setup/loop)
+├── dto/
+│   └── sensor_report.h   BLE·MQTT·main 간 공유 DTO
+├── ble/
+│   └── ble_central.cpp/h BLE 스캔·연결·수신 (다중 연결)
+└── net/
+    ├── wifi_manager.cpp/h WiFi 연결 + NVS SSID/PW 관리
+    └── mqtt_client.cpp/h  MQTT WSS 클라이언트 (ESP-IDF esp_mqtt)
 ```
 
 ### 데이터 흐름
@@ -176,29 +186,35 @@ firmware/src/hub/
                               │
                          공유 버퍼 + 플래그
                               │
-main.cpp loop() ──────→ mqtt_client.publish()
+main.cpp loop() ──────→ mqtt_publish_report()
                               │
-                      Mosquitto (localhost:1883)
+                      esp_mqtt → wss://mqtt.yuumi.wiki/mqtt
                               │
-                      FastAPI 서버 (MQTT 구독)
+                      Cloudflare tunnel → Mosquitto (RPi, :9001)
+                              │
+                      FastAPI 서버 (aiomqtt, localhost:1883 구독)
 ```
 
 ```
-서버 ──MQTT publish──→ Mosquitto ──→ mqtt_client (콜백)
-                                          │
-                                     명령 큐 저장
-                                          │
-                              main.cpp loop()에서 처리
-                                          │
-                                   ble_send_to_node()
+서버 ──MQTT publish──→ Mosquitto (localhost:1883)
+                            │
+                      Cloudflare tunnel (WSS :9001)
+                            │
+                      esp_mqtt 콜백 (허브)
+                            │
+                       명령 큐 저장
+                            │
+                main.cpp loop()에서 처리
+                            │
+                     ble_send_to_node()
 ```
 
 ### Topic 구조
 
 | 방향 | topic | QoS |
 |------|-------|-----|
-| 허브 → 서버 | `seonul/{hub_id}/report` | 1 |
-| 서버 → 허브 | `seonul/{hub_id}/commands` | 1 |
+| 허브 → 서버 | `tempio/{hub_id}/report` | 0 |
+| 서버 → 허브 | `tempio/{hub_id}/commands` | 0 |
 
 hub_id = ESP32 WiFi MAC 주소, 콜론 제거 소문자 (예: `aabbccddeeff`).
 
@@ -234,19 +250,23 @@ hub_id = ESP32 WiFi MAC 주소, 콜론 제거 소문자 (예: `aabbccddeeff`).
 
 시리얼 모니터에서 `wifi set <SSID> <PW>` 입력 → NVS 저장. 재부팅 후에도 유지.
 
-WiFi 없어도 BLE는 동작. WiFi 복구 시 최신 버퍼 데이터부터 publish 재개.
+WiFi 없어도 BLE는 동작. WiFi 복구 시 esp_mqtt가 자동으로 start되어 publish 재개.
 
 ### 재연결
 
 - WiFi 끊김 → `WiFi.setAutoReconnect(true)` 자동 복구
-- MQTT 끊김 → 5초 간격 재연결 시도
-- 끊긴 동안 BLE 데이터 → 버퍼에 최신 1건만 유지 (덮어쓰기)
+- MQTT 끊김 → esp_mqtt가 자동 재연결 처리 (내부 FreeRTOS 태스크)
+- WiFi 끊긴 동안 BLE 데이터 → 버퍼에 최신 1건만 유지 (덮어쓰기)
 
 ### 인프라
 
-- **브로커**: Mosquitto, 라즈베리파이 localhost:1883, 인증 없음 (테스트)
-- **서버**: FastAPI + aiomqtt로 `seonul/+/report` 구독. 기존 HTTP 대시보드 유지.
-- **명령**: `POST /api/hub/{hub_id}/command` → MQTT publish → 허브 수신
+- **브로커**: Mosquitto (Docker Compose), 라즈베리파이
+  - TCP 1883 (서버 → 브로커, 로컬)
+  - WebSocket 9001 (허브 → 브로커, Cloudflare 터널 경유)
+- **Cloudflare 터널**: `wss://mqtt.yuumi.wiki/mqtt` → localhost:9001
+- **서버**: FastAPI (Docker Compose), aiomqtt로 `tempio/+/report` 구독
+- **명령**: 서버 API → MQTT publish → 허브 수신
+- **Docker Compose**: Mosquitto + FastAPI 서버를 함께 구동 (`infra/docker-compose.yml`)
 
 ---
 
@@ -296,6 +316,7 @@ WiFi 없어도 BLE는 동작. WiFi 복구 시 최신 버퍼 데이터부터 publ
 |------|-----------|------|
 | 공통 | NimBLE-Arduino | BLE (ESP32 기본보다 가볍고 안정적) |
 | 허브 | Sensirion I2C SCD4x | CO2 + 온습도 |
-| 허브 | WiFi.h / PubSubClient | WiFi + MQTT |
-| 센서 | Sensirion I2C SHT4x | 온습도 |
-| IR | (직접 구현) | 38kHz PWM + 타이밍 토글 |
+| 허브 | ESP-IDF esp_mqtt | MQTT (WSS 네이티브 지원, Cloudflare 터널 경유) |
+| 허브 | ArduinoJson | JSON 직렬화/역직렬화 |
+| 센서 | DHT sensor library (테스트) / Sensirion I2C SHT4x (프로덕션) | 온습도 |
+| IR | IRremoteESP8266 | IR 프로토콜 (67개 프로토콜, 85+ 브랜드) |
