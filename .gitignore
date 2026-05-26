@@ -1,2 +1,6 @@
 .pio/
 .vscode/
+__pycache__/
+*.pyc
+server/.env
+server/*.db
