@@ -9,7 +9,7 @@ from ports.repository import SensorRepository
 
 
 class SqliteRepository(SensorRepository):
-    def __init__(self, db_path: str = "seonul.db"):
+    def __init__(self, db_path: str = "tempio.db"):
         self.db_path = db_path
         self._init_tables()
 

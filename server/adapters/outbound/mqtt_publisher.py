@@ -27,7 +27,7 @@ class MqttPublisher(CommandPublisher):
     async def publish_commands(self, envelope: CommandEnvelope) -> None:
         if not self._client:
             raise RuntimeError("MQTT publisher not connected")
-        topic = f"seonul/{envelope.hub_id}/commands"
+        topic = f"tempio/{envelope.hub_id}/commands"
         payload = json.dumps(
             {"commands": [cmd.model_dump() for cmd in envelope.commands]}
         )

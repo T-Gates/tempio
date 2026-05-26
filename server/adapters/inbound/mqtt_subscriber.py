@@ -26,7 +26,7 @@ class MqttSubscriber:
                 async with aiomqtt.Client(
                     self.broker_host, self.broker_port
                 ) as client:
-                    await client.subscribe("seonul/+/report")
+                    await client.subscribe("tempio/+/report")
                     async for message in client.messages:
                         try:
                             parts = str(message.topic).split("/")

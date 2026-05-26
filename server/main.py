@@ -43,5 +43,5 @@ async def lifespan(app: FastAPI):
     await publisher.disconnect()
 
 
-app = FastAPI(title="서늘 API", lifespan=lifespan)
+app = FastAPI(title="Tempio API", lifespan=lifespan)
 app.include_router(create_router(service, settings.api_key or None))

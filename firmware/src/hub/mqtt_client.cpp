@@ -9,8 +9,8 @@
 static char hubId[16];
 
 // ──────────── 토픽 ────────────
-static char topicReport[48];   // seonul/{hub_id}/report
-static char topicCommands[48]; // seonul/{hub_id}/commands
+static char topicReport[48];   // tempio/{hub_id}/report
+static char topicCommands[48]; // tempio/{hub_id}/commands
 
 // ──────────── MQTT 클라이언트 ────────────
 static WiFiClient wifiClient;
@@ -89,8 +89,8 @@ static bool reconnect() {
 
 void mqtt_init(const char* broker_ip, uint16_t port) {
     buildHubId();
-    snprintf(topicReport, sizeof(topicReport), "seonul/%s/report", hubId);
-    snprintf(topicCommands, sizeof(topicCommands), "seonul/%s/commands", hubId);
+    snprintf(topicReport, sizeof(topicReport), "tempio/%s/report", hubId);
+    snprintf(topicCommands, sizeof(topicCommands), "tempio/%s/commands", hubId);
 
     mqttClient.setServer(broker_ip, port);
     mqttClient.setBufferSize(1024);

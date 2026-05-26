@@ -1,7 +1,7 @@
 services:
   mosquitto:
     image: eclipse-mosquitto:2
-    container_name: seonul-mosquitto
+    container_name: tempio-mosquitto
     restart: unless-stopped
     ports:
       - "1883:1883"
@@ -12,13 +12,13 @@ services:
   server:
     build:
       context: ../server
-    container_name: seonul-server
+    container_name: tempio-server
     restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
-      - SEONUL_MQTT_BROKER_HOST=mosquitto
-      - SEONUL_DB_PATH=/data/seonul.db
+      - TEMPIO_MQTT_BROKER_HOST=mosquitto
+      - TEMPIO_DB_PATH=/data/tempio.db
     volumes:
       - server-data:/data
     depends_on:
