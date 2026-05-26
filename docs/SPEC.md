@@ -74,20 +74,22 @@ Central(허브) 측에서 연결 후 `requestMTU(512)` 호출.
 
 ## 노드별 펌웨어 동작
 
-### 허브 (ESP32-S3)
+### 허브 (ESP32)
 
 상시 전원(USB). WiFi + BLE central 동시 운영.
 
 ```
 [부팅]
-  WiFi 연결 (저장된 SSID/PW)
-  실패 → BLE 프로비저닝 모드 (앱에서 WiFi 설정)
+  WiFi 연결 (NVS에서 SSID/PW 로드, 최대 10초)
+  ├── 성공 → MQTT 브로커 연결 + subscribe
+  └── 실패 → BLE만 동작, 시리얼에서 wifi set 대기
+  BLE 스캔 시작 (WiFi 성공/실패 무관)
 
-[메인 루프 — 1분 주기]
-  SCD40 읽기 (CO2 + 온습도)
-  BLE 연결된 센서노드 데이터 수집
-  HTTP POST → 서버 (허브 + 센서노드 데이터 일괄)
-  응답에 commands → BLE로 해당 노드에 전달
+[메인 루프]
+  BLE 처리 (스캔, 연결, 데이터 수신)
+  MQTT keepalive + 재연결
+  새 센서 데이터 → MQTT publish (즉시)
+  서버 명령 수신 → BLE로 해당 노드에 전달
 ```
 
 BLE 동시 연결: 안정 4~5대 (WiFi 병행). 소규모 매장(에어컨 1~3대 + 센서 1~2대) 충분.
@@ -144,6 +146,110 @@ IR 발사: `ledcWrite`로 38kHz 캐리어 생성, 타이밍 배열대로 on/off 
 
 ---
 
+## MQTT 통신
+
+### 설계 판단
+
+| 항목 | 결정 | 이유 |
+|------|------|------|
+| 프로토콜 | MQTT (Mosquitto) | 논블로킹 publish, 양방향 실시간, IoT 표준 |
+| WiFi 설정 | NVS + 시리얼 입력 | 코드 재플래시 없이 WiFi 변경 가능 |
+| 업로드 타이밍 | BLE notify 즉시 | 센서 데이터 도착 즉시 서버 전달 |
+| BLE+WiFi 공존 | 플래그 + 메인루프 패턴 | BLE 콜백에서 직접 publish 안 함. PubSubClient가 스레드 비안전 |
+| Topic 구조 | 평면 (`seonul/{hub_id}/...`) | 허브 1대 기준. 매장 확장 시 앞에 store_id 추가 |
+| 라이브러리 | PubSubClient | 가장 인기, 예제 풍부, 안정적 |
+
+### 허브 파일 구조
+
+```
+firmware/src/hub/
+├── main.cpp            오케스트레이터 (setup/loop)
+├── ble_central.cpp/h   BLE 스캔·연결·수신 (기존 + 버퍼 추가)
+├── wifi_manager.cpp/h  WiFi 연결 + NVS SSID/PW 관리
+└── mqtt_client.cpp/h   MQTT 연결·publish·subscribe·명령 파싱
+```
+
+### 데이터 흐름
+
+```
+센서노드 ──BLE notify──→ ble_central (onDataNotify)
+                              │
+                         공유 버퍼 + 플래그
+                              │
+main.cpp loop() ──────→ mqtt_client.publish()
+                              │
+                      Mosquitto (localhost:1883)
+                              │
+                      FastAPI 서버 (MQTT 구독)
+```
+
+```
+서버 ──MQTT publish──→ Mosquitto ──→ mqtt_client (콜백)
+                                          │
+                                     명령 큐 저장
+                                          │
+                              main.cpp loop()에서 처리
+                                          │
+                                   ble_send_to_node()
+```
+
+### Topic 구조
+
+| 방향 | topic | QoS |
+|------|-------|-----|
+| 허브 → 서버 | `seonul/{hub_id}/report` | 1 |
+| 서버 → 허브 | `seonul/{hub_id}/commands` | 1 |
+
+hub_id = ESP32 WiFi MAC 주소, 콜론 제거 소문자 (예: `aabbccddeeff`).
+
+### Report payload (허브 → 서버)
+
+```json
+{
+  "wifi_rssi": -45,
+  "free_heap": 180000,
+  "uptime_ms": 360000,
+  "connected_devices": [
+    { "node_id": "aa:bb:cc:dd:ee:01", "node_type": "sensor", "battery_voltage": 2.85, "rssi": -62 }
+  ],
+  "sensor_readings": [
+    { "node_id": "aa:bb:cc:dd:ee:01", "temperature": 26.3, "humidity": 55.2, "lux": null }
+  ]
+}
+```
+
+### Command payload (서버 → 허브)
+
+```json
+{
+  "commands": [
+    { "target": "aa:bb:cc:dd:ee:01", "type": "SET_INTERVAL", "payload": { "interval_sec": 1800 } },
+    { "target": "aa:bb:cc:dd:ee:02", "type": "IR_TIMING", "payload": { "timings": [4500, 4500, 560, 1690] } },
+    { "target": "aa:bb:cc:dd:ee:01", "type": "RESET_NODE", "payload": { "level": 0 } }
+  ]
+}
+```
+
+### WiFi 설정
+
+시리얼 모니터에서 `wifi set <SSID> <PW>` 입력 → NVS 저장. 재부팅 후에도 유지.
+
+WiFi 없어도 BLE는 동작. WiFi 복구 시 최신 버퍼 데이터부터 publish 재개.
+
+### 재연결
+
+- WiFi 끊김 → `WiFi.setAutoReconnect(true)` 자동 복구
+- MQTT 끊김 → 5초 간격 재연결 시도
+- 끊긴 동안 BLE 데이터 → 버퍼에 최신 1건만 유지 (덮어쓰기)
+
+### 인프라
+
+- **브로커**: Mosquitto, 라즈베리파이 localhost:1883, 인증 없음 (테스트)
+- **서버**: FastAPI + aiomqtt로 `seonul/+/report` 구독. 기존 HTTP 대시보드 유지.
+- **명령**: `POST /api/hub/{hub_id}/command` → MQTT publish → 허브 수신
+
+---
+
 ## 영업시간 기반 절전 (Scheduled Power Saving)
 
 센서노드·IR노드는 건전지 구동이므로, 영업 외 시간에 측정 빈도를 낮춰 배터리 수명을 연장한다.
@@ -190,6 +296,6 @@ IR 발사: `ledcWrite`로 38kHz 캐리어 생성, 타이밍 배열대로 on/off 
 |------|-----------|------|
 | 공통 | NimBLE-Arduino | BLE (ESP32 기본보다 가볍고 안정적) |
 | 허브 | Sensirion I2C SCD4x | CO2 + 온습도 |
-| 허브 | WiFi.h / HTTPClient | 서버 통신 |
+| 허브 | WiFi.h / PubSubClient | WiFi + MQTT |
 | 센서 | Sensirion I2C SHT4x | 온습도 |
 | IR | (직접 구현) | 38kHz PWM + 타이밍 토글 |
