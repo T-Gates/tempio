@@ -268,6 +268,18 @@ static ClientCB clientCb;  // 클라이언트 콜백 인스턴스
 //   5) 슬롯에 저장 (MAC 주소가 곧 식별자)
 //   6) HUB_READY 전송 — "나 준비됐어, 데이터 보내도 돼"
 
+// 클라이언트를 빈 슬롯에 보관 (재사용용). 실패 경로에서 호출.
+// NimBLE 2.5.0에서 deleteClient()는 heap 크래시를 일으키므로,
+// 삭제 대신 슬롯에 넣어두고 findReusableClient()가 재활용하게 한다.
+static void stashClient(NimBLEClient* c) {
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (!nodes[i].used && !nodes[i].client) {
+            nodes[i].client = c;
+            return;
+        }
+    }
+}
+
 static bool connectToNode(const NimBLEAddress& addr) {
     int slot = findEmptySlot();
     if (slot < 0) {
@@ -284,32 +296,33 @@ static bool connectToNode(const NimBLEAddress& addr) {
         Serial.println("createClient failed");
         return false;
     }
-    client->setClientCallbacks(&clientCb);  // 끊김 이벤트를 받으려고 콜백 등록
+    client->setClientCallbacks(&clientCb);
 
-    // 2) BLE 연결 — 실패하면 클라이언트 반환
+    // 2) BLE 연결 — 실패하면 클라이언트를 슬롯에 보관 (누수 방지)
     if (!client->connect(addr)) {
         Serial.printf("connect failed: %s\n", addr.toString().c_str());
         client->disconnect();
+        stashClient(client);
         return false;
     }
 
-    // 3) 서비스 탐색 — 상대방이 가진 BLE 서비스 중 우리 UUID를 찾는다
+    // 3) 서비스 탐색
     auto* svc = client->getService(TEMPIO_SERVICE_UUID);
     if (!svc) {
         Serial.println("service not found");
         client->disconnect();
-        client->disconnect();
+        stashClient(client);
         return false;
     }
 
-    // 4) DATA 특성 구독 — notify가 오면 onDataNotify 콜백으로 받겠다는 등록
+    // 4) DATA 특성 구독
     auto* dataChar = svc->getCharacteristic(TEMPIO_CHAR_DATA_UUID);
     if (dataChar && dataChar->canNotify()) {
         dataChar->subscribe(true, onDataNotify);
     } else {
         Serial.println("DATA subscribe failed");
         client->disconnect();
-        client->disconnect();
+        stashClient(client);
         return false;
     }
 
