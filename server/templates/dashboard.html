@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="refresh" content="5">
+    <title>서늘 테스트 대시보드</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
+        h1 { font-size: 24px; margin-bottom: 20px; color: #38bdf8; }
+        h2 { font-size: 16px; margin: 20px 0 10px; color: #94a3b8; }
+        .cards { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+        .card { background: #1e293b; border-radius: 12px; padding: 20px; min-width: 140px; flex: 1; }
+        .card .label { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+        .card .value { font-size: 28px; font-weight: bold; }
+        .hub { color: #38bdf8; }
+        .co2 { color: #fbbf24; }
+        .temp { color: #f97316; }
+        .hum { color: #06b6d4; }
+        .rssi { color: #a78bfa; }
+        .count { color: #34d399; }
+        .section { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+        .chart-container { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+        table { width: 100%; border-collapse: collapse; }
+        th { padding: 8px; text-align: left; font-size: 12px; color: #64748b; border-bottom: 1px solid #334155; }
+        td { padding: 8px; font-size: 14px; border-bottom: 1px solid #1e293b; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+        .waiting { display: flex; justify-content: center; align-items: center; height: 80vh; font-size: 18px; color: #64748b; }
+    </style>
+</head>
+<body>
+{% if not hub %}
+    <div class="waiting">데이터 대기 중... ESP32에서 POST를 보내세요</div>
+{% else %}
+    <h1>서늘 테스트 대시보드</h1>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">허브 WiFi</div>
+            <div class="value rssi">{{ hub.wifi_rssi if hub.wifi_rssi is not none else '-' }} dBm</div>
+        </div>
+        <div class="card">
+            <div class="label">CO2</div>
+            <div class="value co2">{{ hub.co2 if hub.co2 is not none else '-' }} ppm</div>
+        </div>
+        <div class="card">
+            <div class="label">연결 기기</div>
+            <div class="value count">{{ hub.connected_devices|length if hub.connected_devices else 0 }}대</div>
+        </div>
+        <div class="card">
+            <div class="label">Free Heap</div>
+            <div class="value hub">{{ '{:,}'.format(hub.free_heap) if hub.free_heap is not none else '-' }} B</div>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="section">
+            <h2>연결된 기기</h2>
+            <table>
+                <tr><th>ID</th><th>타입</th><th>배터리</th><th>BLE RSSI</th></tr>
+                {% if hub.connected_devices %}
+                    {% for d in hub.connected_devices %}
+                    <tr>
+                        <td>{{ '🌡' if d.node_type == 'sensor' else '📡' }} {{ d.node_id }}</td>
+                        <td>{{ d.node_type }}</td>
+                        <td>{{ '{}V'.format(d.battery_voltage) if d.battery_voltage else '-' }}</td>
+                        <td>{{ '{} dBm'.format(d.rssi) if d.rssi else '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr><td colspan="4" style="color:#64748b">연결된 기기 없음</td></tr>
+                {% endif %}
+            </table>
+        </div>
+        <div class="section">
+            <h2>센서노드 최신값</h2>
+            <table>
+                <tr><th>노드</th><th>온도</th><th>습도</th><th>조도</th><th>시간</th></tr>
+                {% if sensors %}
+                    {% for nid, d in sensors.items() %}
+                    <tr>
+                        <td>{{ nid }}</td>
+                        <td>{{ d.temperature }}°C</td>
+                        <td>{{ d.humidity }}%</td>
+                        <td>{{ d.lux if d.lux is not none else '-' }}</td>
+                        <td>{% if d.timestamp %}{{ d.timestamp.split('T')[1][:8] if 'T' in d.timestamp else d.timestamp }}{% else %}-{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr><td colspan="5" style="color:#64748b">센서 데이터 없음</td></tr>
+                {% endif %}
+            </table>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="tempChart" height="80"></canvas>
+    </div>
+
+    <script>
+        // sensor_history에서 차트 데이터 추출
+        const sensorHistory = {{ sensor_history | tojson }};
+        const labels = sensorHistory.map(d => {
+            const ts = d.timestamp || '';
+            if (ts.includes('T')) return ts.split('T')[1].substring(0, 8);
+            if (ts.length > 8) return ts.substring(11, 19);
+            return ts;
+        });
+        const temps = sensorHistory.map(d => d.temperature);
+        const hums = sensorHistory.map(d => d.humidity);
+
+        new Chart(document.getElementById('tempChart'), {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    { label: '온도 (°C)', data: temps, borderColor: '#f97316', tension: 0.3, yAxisID: 'y' },
+                    { label: '습도 (%)', data: hums, borderColor: '#06b6d4', tension: 0.3, yAxisID: 'y1' }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: { position: 'left', ticks: { color: '#f97316' }, grid: { color: '#334155' } },
+                    y1: { position: 'right', ticks: { color: '#06b6d4' }, grid: { display: false } },
+                    x: { ticks: { color: '#64748b', maxRotation: 45 }, grid: { color: '#334155' } }
+                },
+                plugins: { legend: { labels: { color: '#e2e8f0' } } }
+            }
+        });
+    </script>
+{% endif %}
+</body>
+</html>
