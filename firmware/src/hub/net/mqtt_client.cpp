@@ -5,6 +5,9 @@
 #include <mqtt_client.h>
 #include "mqtt_client.h"
 
+// Arduino-ESP32 내장 CA 번들 — 링크 타임에 존재하지만 헤더 미노출
+extern "C" esp_err_t arduino_esp_crt_bundle_attach(void *conf);
+
 // ──────────── hub_id ────────────
 // WiFi MAC에서 콜론 제거 + 소문자. "aabbccddeeff" 형태.
 static char hubId[16];
