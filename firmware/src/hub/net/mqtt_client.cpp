@@ -5,8 +5,30 @@
 #include <mqtt_client.h>
 #include "mqtt_client.h"
 
-// Arduino-ESP32 내장 CA 번들 — 링크 타임에 존재하지만 헤더 미노출
-extern "C" esp_err_t arduino_esp_crt_bundle_attach(void *conf);
+// GTS Root R4 (Google Trust Services) — Cloudflare 인증서 체인의 루트 CA
+// Cloudflare가 CA를 변경하면 이 인증서도 교체 필요
+static const char* root_ca = \
+"-----BEGIN CERTIFICATE-----\n"
+"MIIDejCCAmKgAwIBAgIQf+UwvzMTQ77dghYQST2KGzANBgkqhkiG9w0BAQsFADBX\n"
+"MQswCQYDVQQGEwJCRTEZMBcGA1UEChMQR2xvYmFsU2lnbiBudi1zYTEQMA4GA1UE\n"
+"CxMHUm9vdCBDQTEbMBkGA1UEAxMSR2xvYmFsU2lnbiBSb290IENBMB4XDTIzMTEx\n"
+"NTAzNDMyMVoXDTI4MDEyODAwMDA0MlowRzELMAkGA1UEBhMCVVMxIjAgBgNVBAoT\n"
+"GUdvb2dsZSBUcnVzdCBTZXJ2aWNlcyBMTEMxFDASBgNVBAMTC0dUUyBSb290IFI0\n"
+"MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE83Rzp2iLYK5DuDXFgTB7S0md+8Fhzube\n"
+"Rr1r1WEYNa5A3XP3iZEwWus87oV8okB2O6nGuEfYKueSkWpz6bFyOZ8pn6KY019e\n"
+"WIZlD6GEZQbR3IvJx3PIjGov5cSr0R2Ko4H/MIH8MA4GA1UdDwEB/wQEAwIBhjAd\n"
+"BgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDwYDVR0TAQH/BAUwAwEB/zAd\n"
+"BgNVHQ4EFgQUgEzW63T/STaj1dj8tT7FavCUHYwwHwYDVR0jBBgwFoAUYHtmGkUN\n"
+"l8qJUC99BM00qP/8/UswNgYIKwYBBQUHAQEEKjAoMCYGCCsGAQUFBzAChhpodHRw\n"
+"Oi8vaS5wa2kuZ29vZy9nc3IxLmNydDAtBgNVHR8EJjAkMCKgIKAehhxodHRwOi8v\n"
+"Yy5wa2kuZ29vZy9yL2dzcjEuY3JsMBMGA1UdIAQMMAowCAYGZ4EMAQIBMA0GCSqG\n"
+"SIb3DQEBCwUAA4IBAQAYQrsPBtYDh5bjP2OBDwmkoWhIDDkic574y04tfzHpn+cJ\n"
+"odI2D4SseesQ6bDrarZ7C30ddLibZatoKiws3UL9xnELz4ct92vID24FfVbiI1hY\n"
+"+SW6FoVHkNeWIP0GCbaM4C6uVdF5dTUsMVs/ZbzNnIdCp5Gxmx5ejvEau8otR/Cs\n"
+"kGN+hr/W5GvT1tMBjgWKZ1i4//emhA1JG1BbPzoLJQvyEotc03lXjTaCzv8mEbep\n"
+"8RqZ7a2CPsgRbuvTPBwcOMBBmuFeU88+FSBX6+7iP0il8b4Z0QFqIwwMHfs/L6K1\n"
+"vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl\n"
+"-----END CERTIFICATE-----\n";
 
 // ──────────── hub_id ────────────
 // WiFi MAC에서 콜론 제거 + 소문자. "aabbccddeeff" 형태.
@@ -120,8 +142,7 @@ void mqtt_init(const char* broker_uri) {
     cfg.uri = broker_uri;
     cfg.client_id = clientId;
     cfg.buffer_size = 1024;
-    // Cloudflare 등 공인 인증서 검증용 — ESP32 내장 CA 번들 사용
-    cfg.crt_bundle_attach = arduino_esp_crt_bundle_attach;
+    cfg.cert_pem = root_ca;
 
     client = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, mqttEventHandler, nullptr);
