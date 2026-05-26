@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <mqtt_client.h>
+#include <esp_crt_bundle.h>
 #include "mqtt_client.h"
 
 // ──────────── hub_id ────────────
@@ -117,6 +118,8 @@ void mqtt_init(const char* broker_uri) {
     cfg.uri = broker_uri;
     cfg.client_id = clientId;
     cfg.buffer_size = 1024;
+    // Cloudflare 등 공인 인증서 검증용 — ESP32 내장 CA 번들 사용
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
 
     client = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, mqttEventHandler, nullptr);
