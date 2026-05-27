@@ -1,5 +1,31 @@
 # BLE 프로토콜
 
+## NimBLE
+
+BLE 스택으로 [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) v2.5.0을 사용한다.
+
+### 왜 NimBLE인가
+
+ESP32 기본 BLE 스택(Bluedroid)은 메모리를 ~350KB 먹는다. NimBLE은 ~50KB로 같은 기능을 제공하고, WiFi와 BLE를 동시에 쓰는 허브에서 힙 여유가 필수적이다. API도 더 간결하다.
+
+### 주의사항 (v2.5.0)
+
+| 함정 | 증상 | 해결 |
+|------|------|------|
+| `deleteClient()` 콜백 내 호출 | heap 크래시, 재부팅 루프 | 콜백에선 플래그만, loop()에서 정리 |
+| 클라이언트 풀 누수 | `createClient failed` 무한 반복 | 끊긴 클라이언트를 슬롯에 보관 후 재사용 (`findReusableClient`) |
+| `NimBLEAddress(string)` | 컴파일 에러 | v2.5.0은 `NimBLEAddress(str, 0)` — type 파라미터 필수 |
+| `toString().c_str()` | 댕글링 포인터, 깨진 출력 | `std::string`을 변수에 담아야 포인터 유효 |
+| `getClientListSize` | 컴파일 에러 | v2.5.0에서 제거됨, 자체 `activeCount()` 사용 |
+
+상세 사례와 코드는 [NOTES.md](../NOTES.md) 참조.
+
+### 설정
+
+- `CONFIG_BT_NIMBLE_MAX_CONNECTIONS=5` (platformio.ini build_flags)
+- `NimBLEDevice::setMTU(512)` — Central(허브)에서 호출
+- Active scan 사용 (`setActiveScan(true)`)
+
 ## UUID 체계
 
 128-bit UUID. 앞 8자리 `4c544d50` = ASCII "LTMP" (tempio).
