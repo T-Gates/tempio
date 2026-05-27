@@ -5,6 +5,7 @@
 #include "../ble/ble_central.h"
 #include "../net/mqtt_handler.h"
 
+// 허브 상태를 JSON으로 직렬화해서 MQTT report 토픽에 발행
 static void handleHubStatus() {
     char json[256];
     JsonDocument doc;
@@ -20,6 +21,7 @@ static void handleHubStatus() {
     Serial.println("<< HUB_STATUS published");
 }
 
+// 허브 자체 명령 라우터 — cmd.type으로 분기
 void handle_hub_command(const MqttCommand& cmd) {
     if (strcmp(cmd.type, "HUB_STATUS") == 0) handleHubStatus();
     else Serial.printf("<< unknown hub cmd: %s\n", cmd.type);

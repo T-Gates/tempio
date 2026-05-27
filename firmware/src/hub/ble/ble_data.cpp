@@ -8,11 +8,13 @@
 // onDataNotify(NimBLE 태스크) → push, ble_get_pending_report(Arduino loop) → pop
 static ThreadSafeQueue<SensorReport, REPORT_QUEUE_MAX> reportQueue;
 
+// notify를 보낸 특성 → 클라이언트 → 슬롯 인덱스 역추적
 static int resolveSourceSlot(NimBLERemoteCharacteristic* c) {
     auto* svc = c->getRemoteService();
     return svc ? findSlotByClient(svc->getClient()) : -1;
 }
 
+// NODE_INFO 메시지 처리 — 노드 타입(sensor/ir) 등록 + 시리얼 출력
 static void handleNodeInfo(int slot, const uint8_t* data, size_t len, const char* srcAddr) {
     if (len < sizeof(NodeInfo)) return;
     NodeInfo ni;
@@ -23,6 +25,7 @@ static void handleNodeInfo(int slot, const uint8_t* data, size_t len, const char
                   srcAddr, typeName, ni.battery_mv, ni.fw_major, ni.fw_minor);
 }
 
+// BLE 바이너리 → SensorReport DTO 변환 (허브 상태는 main.cpp에서 주입)
 static SensorReport buildReport(int slot, const SensorData& sd, const char* srcAddr) {
     SensorReport rpt;
     strncpy(rpt.node_id, srcAddr, sizeof(rpt.node_id) - 1);
@@ -43,6 +46,7 @@ static void enqueueReport(const SensorReport& rpt) {
     reportQueue.push(rpt);
 }
 
+// SENSOR_DATA 메시지 처리 — 파싱 → 리포트 생성 → 큐에 적재
 static void handleSensorData(int slot, const uint8_t* data, size_t len, const char* srcAddr) {
     if (len < sizeof(SensorData)) return;
     SensorData sd;

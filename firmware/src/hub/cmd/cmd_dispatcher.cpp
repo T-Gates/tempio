@@ -15,6 +15,7 @@ static PendingPool pool;
 
 // ──────────── BLE 패킷 변환 + 전송 ────────────
 
+// SET_INTERVAL → SetInterval 구조체로 변환 후 BLE 전송
 static bool handleSetInterval(const MqttCommand& cmd) {
     JsonDocument doc;
     if (deserializeJson(doc, cmd.payload)) return false;
@@ -27,6 +28,7 @@ static bool handleSetInterval(const MqttCommand& cmd) {
     return ok;
 }
 
+// RESET_NODE → ResetNode 구조체로 변환 후 BLE 전송
 static bool handleResetNode(const MqttCommand& cmd) {
     JsonDocument doc;
     if (deserializeJson(doc, cmd.payload)) return false;
@@ -39,6 +41,7 @@ static bool handleResetNode(const MqttCommand& cmd) {
     return ok;
 }
 
+// IR_TIMING → 가변 길이 바이너리 패킷(헤더+타이밍 배열)으로 변환 후 BLE 전송
 static bool handleIrTiming(const MqttCommand& cmd) {
     JsonDocument doc;
     if (deserializeJson(doc, cmd.payload)) return false;
@@ -69,6 +72,7 @@ static bool handleIrTiming(const MqttCommand& cmd) {
     return ok;
 }
 
+// 명령 타입별 핸들러로 라우팅. 알 수 없는 타입이면 false.
 static bool trySend(const MqttCommand& cmd) {
     if (strcmp(cmd.type, "SET_INTERVAL") == 0) return handleSetInterval(cmd);
     if (strcmp(cmd.type, "RESET_NODE") == 0)   return handleResetNode(cmd);
@@ -81,6 +85,7 @@ static bool trySend(const MqttCommand& cmd) {
 // 공개 API
 // ══════════════════════════════════════════════════════════════════════
 
+// 명령 진입점: target 비어있으면 허브 자체 명령, 아니면 노드로 전송 시도 → 실패 시 펜딩
 void dispatch_command(const MqttCommand& cmd) {
     if (cmd.target[0] == '\0') { handle_hub_command(cmd); return; }
 
@@ -89,6 +94,7 @@ void dispatch_command(const MqttCommand& cmd) {
     Serial.printf(">> pending: %s → %s\n", cmd.type, cmd.target);
 }
 
+// 특정 노드의 펜딩 큐에서 명령을 꺼내 전송. 실패하면 다시 넣고 중단.
 void flush_node_pending(const char* nodeAddr) {
     MqttCommand cmd;
     while (pool.pop(nodeAddr, &cmd)) {
@@ -99,6 +105,7 @@ void flush_node_pending(const char* nodeAddr) {
     }
 }
 
+// 모든 노드의 펜딩 큐 순회하며 전송 시도. loop()에서 매 틱 호출.
 void flush_all_pending() {
     int idx = 0;
     char nodeId[18];

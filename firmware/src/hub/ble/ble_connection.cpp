@@ -6,9 +6,11 @@
 #include "../cmd/cmd_dispatcher.h"
 
 // ──────────── 연결 대기 큐 ────────────
+// 스캔에서 발견된 노드 주소를 여기 쌓아두고, processNextPending()에서 하나씩 연결
 static NimBLEAddress pendingAddrs[PENDING_MAX];
 static int pendingCount = 0;
 
+// 이미 대기열에 있는 주소인지 중복 체크
 static bool isAlreadyPending(const NimBLEAddress& addr) {
     for (int i = 0; i < pendingCount; i++) {
         if (pendingAddrs[i] == addr) return true;
@@ -18,13 +20,14 @@ static bool isAlreadyPending(const NimBLEAddress& addr) {
 
 // ──────────── NimBLE 콜백 ────────────
 
+// 스캔 결과 콜백 — tempio 서비스 UUID를 광고하는 노드만 대기열에 추가
 class ScanCB : public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice* dev) override {
         if (!dev->isAdvertisingService(NimBLEUUID(TEMPIO_SERVICE_UUID))) return;
         auto addr = dev->getAddress();
-        if (isAlreadyConnected(addr)) return;
-        if (isAlreadyPending(addr))   return;
-        if (findEmptySlot() < 0)      return;
+        if (isAlreadyConnected(addr)) return;  // 이미 연결됨
+        if (isAlreadyPending(addr))   return;  // 이미 대기열에 있음
+        if (findEmptySlot() < 0)      return;  // 슬롯 풀
         if (pendingCount >= PENDING_MAX) return;
 
         Serial.printf("found: %s  rssi=%d\n",
@@ -33,6 +36,7 @@ class ScanCB : public NimBLEScanCallbacks {
     }
 };
 
+// 연결/해제 콜백 — NimBLE가 연결 상태 변할 때 호출
 class ClientCB : public NimBLEClientCallbacks {
     void onConnect(NimBLEClient* c) override {
         Serial.printf("connected: %s\n", c->getPeerAddress().toString().c_str());
@@ -46,6 +50,7 @@ class ClientCB : public NimBLEClientCallbacks {
             nodes[slot].used = false;
             nodes[slot].configChar = nullptr;
         }
+        // LED 꺼짐 = 연결된 노드 0개, 재스캔 시작
         digitalWrite(LED_PIN, activeCount() > 0 ? LED_ON : !LED_ON);
         doScan = true;
     }
@@ -56,7 +61,7 @@ static ClientCB clientCb;
 
 // ──────────── 연결 헬퍼 ────────────
 
-// NimBLE 2.5.0에서 deleteClient()가 heap 크래시 → 삭제 대신 슬롯에 보관
+// NimBLE 2.5.0 버그: deleteClient()가 heap 크래시 → 삭제 대신 빈 슬롯에 보관해서 재사용
 static void stashClient(NimBLEClient* c) {
     for (int i = 0; i < MAX_NODES; i++) {
         if (!nodes[i].used && !nodes[i].client) {
@@ -66,11 +71,13 @@ static void stashClient(NimBLEClient* c) {
     }
 }
 
+// 연결 해제 후 클라이언트 객체를 재사용 풀에 반환
 static void disconnectAndStash(NimBLEClient* c) {
     c->disconnect();
     stashClient(c);
 }
 
+// 재사용 가능한 클라이언트 가져오기, 없으면 새로 생성
 static NimBLEClient* acquireClient() {
     auto* c = findReusableClient();
     if (!c) c = NimBLEDevice::createClient();
@@ -109,6 +116,7 @@ static void registerNode(int slot, NimBLEClient* client,
     flush_node_pending(addr.toString().c_str());
 }
 
+// 노드 연결 전체 흐름: 클라이언트 획득 → TCP 연결 → 서비스 탐색 → 슬롯 등록
 static bool connectToNode(const NimBLEAddress& addr) {
     int slot = findEmptySlot();
     if (slot < 0) return false;
@@ -138,10 +146,11 @@ void ble_connection_init(NimBLEScan* pScan) {
     pScan->setWindow(BLE_SCAN_WINDOW);
 }
 
-// pending 큐에서 주소 하나를 꺼내 연결
+// 대기열 맨 앞 주소를 꺼내 연결 시도. 스캔 일시정지 → 연결 → 스캔 재개.
 void processNextPending() {
     if (pendingCount == 0) return;
     NimBLEAddress addr = pendingAddrs[0];
+    // 배열 앞에서 꺼내고 뒤를 한 칸씩 당김 (FIFO)
     for (int i = 1; i < pendingCount; i++)
         pendingAddrs[i - 1] = pendingAddrs[i];
     pendingCount--;

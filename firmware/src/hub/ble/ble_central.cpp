@@ -70,18 +70,20 @@ NimBLEClient* findReusableClient() {
 
 // ──────────── 공개 API ────────────
 
+// NimBLE 스택 초기화 + 스캔 시작
 void ble_central_init() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, !LED_ON);
 
     NimBLEDevice::init("tempio-hub");
-    NimBLEDevice::setMTU(512);
+    NimBLEDevice::setMTU(512);  // IR 타이밍 등 큰 패킷을 위해 MTU 확대
 
     auto* pScan = NimBLEDevice::getScan();
     ble_connection_init(pScan);
-    pScan->start(0, false);
+    pScan->start(0, false);     // 0 = 무한 스캔, false = 중복 결과 필터링
 }
 
+// 5초마다 연결 상태 시리얼 출력
 static void printStatus() {
     if (millis() - lastPrint <= 5000) return;
     lastPrint = millis();
@@ -90,13 +92,14 @@ static void printStatus() {
     else Serial.printf("nodes: %d connected\n", count);
 }
 
+// 매 loop() 틱마다 호출 — 끊긴 연결 정리 → 재스캔 → 대기 노드 연결
 void ble_central_loop() {
     cleanupDisconnected();
     if (doScan) {
         doScan = false;
         NimBLEDevice::getScan()->start(0, false);
     }
-    // 한번에 하나씩. 너무 많이 처리하면 루프가 길어져서 다른 작업이 밀릴 수 있음.
+    // 한번에 하나씩. 여러 개 처리하면 루프가 길어져서 MQTT 등 다른 작업이 밀림.
     processNextPending();
     printStatus();
 }
@@ -105,6 +108,7 @@ int ble_connected_count() {
     return activeCount();
 }
 
+// MAC 주소 문자열로 노드를 찾아 CONFIG 특성에 바이너리 write
 bool ble_send_to_node(const char* addrStr, const void* data, size_t len) {
     NimBLEAddress addr(std::string(addrStr), 0);
     int slot = findSlotByAddr(addr);
