@@ -119,7 +119,7 @@ static void parseCommands(const char* data, int len) {
 // mqtt_init()에서 register_event로 등록해둠.
 // 파이썬으로 치면 client.on("*", mqtt_event_handler) 같은 콜백.
 static void mqttEventHandler(void* arg, esp_event_base_t base, int32_t event_id, void* event_data) {
-    auto* event = (esp_mqtt_event_handle_t)event_data;
+    auto* event = static_cast<esp_mqtt_event_handle_t>(event_data);
 
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:

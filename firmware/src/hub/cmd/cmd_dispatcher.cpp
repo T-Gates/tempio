@@ -58,7 +58,7 @@ static bool handleIrTiming(const MqttCommand& cmd) {
                       cmd.target, pktLen);
         return false;
     }
-    uint8_t* pkt = (uint8_t*)malloc(pktLen);
+    auto* pkt = static_cast<uint8_t*>(malloc(pktLen));
     if (!pkt) return false;
 
     pkt[0] = static_cast<uint8_t>(MsgType::IR_TIMING);
