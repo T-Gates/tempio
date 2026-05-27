@@ -31,6 +31,7 @@ enum class MsgType : uint8_t {
     RESET_NODE     = 0x13,  // 허브 → 노드: 리셋 명령 (레벨별)
 
     NODE_INFO      = 0x20,  // 노드 → 허브: 연결 직후 자기 소개 (타입, ID, 배터리, 펌웨어)
+    CMD_ACK        = 0x21,  // 노드 → 허브: 서버 명령 실행 결과 회신
 };
 
 // ──────────── 노드 타입 ────────────
@@ -79,6 +80,15 @@ struct NodeInfo {
 //
 // BLE MTU 기본 20바이트로는 부족.
 // MTU 협상(최대 512)으로 해결하거나, 안 되면 패킷 분할 전송 구현 필요.
+
+// 노드 → 허브: 명령 실행 결과 (3바이트)
+// 노드가 서버 명령(SET_INTERVAL 등)을 받아 실행한 뒤 결과를 회신.
+// 허브는 이걸 서버에 MQTT로 전달해서 명령 도달 여부를 확인.
+struct CmdAck {
+    MsgType type = MsgType::CMD_ACK;
+    MsgType cmd_type;  // 어떤 명령에 대한 ACK인지 (예: SET_INTERVAL)
+    uint8_t success;   // 1=성공, 0=실패
+} __attribute__((packed));
 
 // ──────────── 설정 명령 ────────────
 

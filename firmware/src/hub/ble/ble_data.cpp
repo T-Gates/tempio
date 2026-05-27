@@ -46,6 +46,17 @@ static void enqueueReport(const SensorReport& rpt) {
     reportQueue.push(rpt);
 }
 
+// CMD_ACK 수신 — 노드가 서버 명령을 실행한 결과. 로그만 출력 (서버 전달은 추후 구현)
+static void handleCmdAck(const uint8_t* data, size_t len, const char* srcAddr) {
+    if (len < sizeof(CmdAck)) return;
+    CmdAck ack;
+    memcpy(&ack, data, sizeof(ack));
+    Serial.printf(">> [%s] CMD_ACK: cmd=0x%02x %s\n",
+                  srcAddr, static_cast<uint8_t>(ack.cmd_type),
+                  ack.success ? "ok" : "fail");
+    // TODO: 서버에 ACK 전달 (MQTT report)
+}
+
 // SENSOR_DATA 메시지 처리 — 파싱 → 리포트 생성 → 큐에 적재
 static void handleSensorData(int slot, const uint8_t* data, size_t len, const char* srcAddr) {
     if (len < sizeof(SensorData)) return;
@@ -71,6 +82,9 @@ void onDataNotify(NimBLERemoteCharacteristic* c,
             break;
         case MsgType::SENSOR_DATA:
             handleSensorData(slot, data, len, srcAddr);
+            break;
+        case MsgType::CMD_ACK:
+            handleCmdAck(data, len, srcAddr);
             break;
         default:
             Serial.printf(">> [%s] unknown: 0x%02x (%u bytes)\n",
