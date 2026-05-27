@@ -6,7 +6,7 @@ from typing import Callable
 import aiomqtt
 
 from constants import MQTT_TOPIC_REPORT_PATTERN
-from domain.models import HubReport
+from domain.models import SensorReport
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +18,9 @@ class MqttSubscriber:
     ) -> None:
         self.broker_host = broker_host
         self.broker_port = broker_port
-        self._callback: Callable[[HubReport], None] | None = None
+        self._callback: Callable[[SensorReport], None] | None = None
 
-    def on_report(self, callback: Callable[[HubReport], None]) -> None:
+    def on_report(self, callback: Callable[[SensorReport], None]) -> None:
         self._callback = callback
 
     async def run(self) -> None:
@@ -41,7 +41,7 @@ class MqttSubscriber:
                             data: dict = json.loads(
                                 message.payload.decode()
                             )
-                            report = HubReport.from_mqtt_payload(hub_id, data)
+                            report = SensorReport.from_mqtt_payload(hub_id, data)
 
                             if self._callback:
                                 await asyncio.to_thread(

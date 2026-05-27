@@ -1,10 +1,9 @@
 import sqlite3
-import json
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional
 
-from domain.models import DeviceInfo, HubReport, SensorReading, SensorReadingRecord
+from domain.models import SensorReport, SensorReportRecord
 from ports.repository import SensorRepository
 
 
@@ -30,101 +29,71 @@ class SqliteRepository(SensorRepository):
         with self._conn() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS hub_reports (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    hub_id TEXT NOT NULL,
-                    wifi_rssi INTEGER,
-                    free_heap INTEGER,
-                    uptime_ms INTEGER,
-                    co2 INTEGER,
-                    hub_temperature REAL,
-                    hub_humidity REAL,
-                    connected_devices TEXT,  -- JSON
-                    timestamp TEXT NOT NULL
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS sensor_readings (
+                CREATE TABLE IF NOT EXISTS sensor_reports (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     hub_id TEXT NOT NULL,
                     node_id TEXT NOT NULL,
-                    temperature REAL NOT NULL,
-                    humidity REAL NOT NULL,
+                    node_type TEXT NOT NULL,
+                    temperature REAL,
+                    humidity REAL,
                     lux REAL,
+                    battery_voltage REAL,
+                    ble_rssi INTEGER,
+                    wifi_rssi INTEGER,
+                    free_heap INTEGER,
+                    uptime_ms INTEGER,
                     timestamp TEXT NOT NULL
                 )
             """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_sensor_readings_node_id ON sensor_readings(node_id, id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_sensor_readings_hub_id ON sensor_readings(hub_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_hub_reports_hub_id ON hub_reports(hub_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sr_node ON sensor_reports(node_id, id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sr_hub ON sensor_reports(hub_id)")
 
-    def save_hub_report(self, report: HubReport) -> None:
+    def save_report(self, report: SensorReport) -> None:
         ts = report.timestamp.isoformat() if report.timestamp else datetime.now().isoformat()
-        devices_json = json.dumps([d.model_dump() for d in report.connected_devices])
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO hub_reports (hub_id, wifi_rssi, free_heap, uptime_ms, co2, hub_temperature, hub_humidity, connected_devices, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (report.hub_id, report.wifi_rssi, report.free_heap, report.uptime_ms,
-                 report.co2, report.hub_temperature, report.hub_humidity, devices_json, ts),
+                """INSERT INTO sensor_reports
+                   (hub_id, node_id, node_type, temperature, humidity, lux,
+                    battery_voltage, ble_rssi, wifi_rssi, free_heap, uptime_ms, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (report.hub_id, report.node_id, report.node_type,
+                 report.temperature, report.humidity, report.lux,
+                 report.battery_voltage, report.ble_rssi,
+                 report.wifi_rssi, report.free_heap, report.uptime_ms, ts),
             )
 
-    def save_sensor_reading(self, hub_id: str, reading: SensorReading, timestamp: Optional[datetime]) -> None:
-        ts = timestamp.isoformat() if timestamp else datetime.now().isoformat()
-        with self._conn() as conn:
-            conn.execute(
-                "INSERT INTO sensor_readings (hub_id, node_id, temperature, humidity, lux, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-                (hub_id, reading.node_id, reading.temperature, reading.humidity, reading.lux, ts),
-            )
-
-    def _row_to_hub_report(self, row: sqlite3.Row) -> HubReport:
-        d = dict(row)
-        devices_raw = json.loads(d["connected_devices"]) if d["connected_devices"] else []
-        return HubReport(
-            hub_id=d["hub_id"],
-            wifi_rssi=d["wifi_rssi"],
-            free_heap=d["free_heap"],
-            uptime_ms=d["uptime_ms"],
-            co2=d["co2"],
-            hub_temperature=d["hub_temperature"],
-            hub_humidity=d["hub_humidity"],
-            connected_devices=[DeviceInfo(**dev) for dev in devices_raw],
-            timestamp=d["timestamp"],
-        )
-
-    def get_hub_reports(self, limit: int = 100) -> list[HubReport]:
+    def get_reports(self, limit: int = 100) -> list[SensorReportRecord]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM hub_reports ORDER BY id DESC LIMIT ?", (limit,)
+                "SELECT * FROM sensor_reports ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
-        result = [self._row_to_hub_report(row) for row in rows]
+        result = [SensorReportRecord(**dict(row)) for row in rows]
         result.reverse()
         return result
 
-    def get_sensor_readings(self, limit: int = 100) -> list[SensorReadingRecord]:
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM sensor_readings ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
-        result = [SensorReadingRecord(**dict(row)) for row in rows]
-        result.reverse()
-        return result
-
-    def get_latest_hub_report(self) -> Optional[HubReport]:
+    def get_latest_report(self) -> Optional[SensorReport]:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM hub_reports ORDER BY id DESC LIMIT 1"
+                "SELECT * FROM sensor_reports ORDER BY id DESC LIMIT 1"
             ).fetchone()
         if not row:
             return None
-        return self._row_to_hub_report(row)
+        d = dict(row)
+        return SensorReport(
+            hub_id=d["hub_id"], node_id=d["node_id"], node_type=d["node_type"],
+            temperature=d["temperature"], humidity=d["humidity"], lux=d["lux"],
+            battery_voltage=d["battery_voltage"], ble_rssi=d["ble_rssi"],
+            wifi_rssi=d["wifi_rssi"], free_heap=d["free_heap"],
+            uptime_ms=d["uptime_ms"], timestamp=d["timestamp"],
+        )
 
-    def get_latest_sensor_by_node(self) -> dict[str, SensorReadingRecord]:
+    def get_latest_by_node(self) -> dict[str, SensorReportRecord]:
         with self._conn() as conn:
             rows = conn.execute("""
-                SELECT s.* FROM sensor_readings s
+                SELECT s.* FROM sensor_reports s
                 INNER JOIN (
                     SELECT node_id, MAX(id) as max_id
-                    FROM sensor_readings GROUP BY node_id
+                    FROM sensor_reports GROUP BY node_id
                 ) latest ON s.id = latest.max_id
             """).fetchall()
-        return {row["node_id"]: SensorReadingRecord(**dict(row)) for row in rows}
+        return {row["node_id"]: SensorReportRecord(**dict(row)) for row in rows}

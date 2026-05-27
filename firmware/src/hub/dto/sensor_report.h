@@ -17,29 +17,18 @@ struct SensorReport {
     uint32_t free_heap;
     uint32_t uptime_ms;
 
-    // MQTT publish용 JSON 생성
     int toJson(char* buf, size_t bufSize) const {
         JsonDocument doc;
+        doc["node_id"] = node_id;
+        doc["node_type"] = node_type_str;
+        doc["temperature"] = serialized(String(temperature, 1));
+        doc["humidity"] = serialized(String(humidity, 1));
+        if (ldr > 0) doc["lux"] = ldr;
+        doc["battery_voltage"] = battery_mv / 1000.0f;
+        doc["ble_rssi"] = ble_rssi;
         doc["wifi_rssi"] = wifi_rssi;
         doc["free_heap"] = free_heap;
         doc["uptime_ms"] = uptime_ms;
-
-        JsonArray devices = doc["connected_devices"].to<JsonArray>();
-        JsonObject dev = devices.add<JsonObject>();
-        dev["node_id"] = node_id;
-        dev["node_type"] = node_type_str;
-        dev["battery_voltage"] = battery_mv / 1000.0f;
-        dev["rssi"] = ble_rssi;
-
-        JsonArray readings = doc["sensor_readings"].to<JsonArray>();
-        JsonObject reading = readings.add<JsonObject>();
-        reading["node_id"] = node_id;
-        reading["temperature"] = serialized(String(temperature, 1));
-        reading["humidity"] = serialized(String(humidity, 1));
-        if (ldr > 0) {
-            reading["lux"] = ldr;
-        }
-
         return serializeJson(doc, buf, bufSize);
     }
 };

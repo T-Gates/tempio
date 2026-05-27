@@ -3,49 +3,43 @@ from datetime import datetime
 from typing import Optional
 
 
-class DeviceInfo(BaseModel):
+class SensorReport(BaseModel):
+    hub_id: str
     node_id: str
     node_type: str  # "sensor" | "ir"
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
+    lux: Optional[float] = None
     battery_voltage: Optional[float] = None
-    rssi: Optional[int] = None
-
-
-class SensorReading(BaseModel):
-    node_id: str
-    temperature: float
-    humidity: float
-    lux: Optional[float] = None
-
-
-class SensorReadingRecord(BaseModel):
-    id: int
-    hub_id: str
-    node_id: str
-    temperature: float
-    humidity: float
-    lux: Optional[float] = None
-    timestamp: str
-
-
-class HubReport(BaseModel):
-    hub_id: str
+    ble_rssi: Optional[int] = None
     wifi_rssi: Optional[int] = None
     free_heap: Optional[int] = None
     uptime_ms: Optional[int] = None
-    co2: Optional[int] = None
-    hub_temperature: Optional[float] = None
-    hub_humidity: Optional[float] = None
-    connected_devices: list[DeviceInfo] = []
-    sensor_readings: list[SensorReading] = []
     timestamp: Optional[datetime] = None
 
     @classmethod
-    def from_mqtt_payload(cls, hub_id: str, data: dict) -> "HubReport":
+    def from_mqtt_payload(cls, hub_id: str, data: dict) -> "SensorReport":
         return cls(
             hub_id=hub_id,
             timestamp=datetime.now(),
             **{k: v for k, v in data.items() if k in cls.model_fields and k not in ("hub_id", "timestamp")},
         )
+
+
+class SensorReportRecord(BaseModel):
+    id: int
+    hub_id: str
+    node_id: str
+    node_type: str
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
+    lux: Optional[float] = None
+    battery_voltage: Optional[float] = None
+    ble_rssi: Optional[int] = None
+    wifi_rssi: Optional[int] = None
+    free_heap: Optional[int] = None
+    uptime_ms: Optional[int] = None
+    timestamp: str
 
 
 class Command(BaseModel):

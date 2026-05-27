@@ -8,7 +8,7 @@
 | 전송 계층 | WSS (WebSocket Secure) | Cloudflare 터널 경유에 필요. TCP 1883은 터널 불가 |
 | MQTT 라이브러리 | ESP-IDF esp_mqtt | WSS 네이티브 지원. PubSubClient는 TCP만 지원하여 교체 |
 | WiFi 설정 | NVS + 시리얼 입력 | 코드 재플래시 없이 WiFi 변경 가능 |
-| 업로드 타이밍 | BLE notify 즉시 | 센서 데이터 도착 즉시 서버 전달 |
+| 업로드 타이밍 | BLE notify 즉시 | 센서 데이터 도착 즉시 서버 전달. 노드당 1메시지 |
 | BLE+WiFi 공존 | 공유 버퍼 + 플래그 + 메인루프 패턴 | BLE 콜백에서 직접 publish 안 함 |
 | Topic 구조 | 평면 (`tempio/{hub_id}/...`) | 허브 1대 기준. 매장 확장 시 앞에 store_id 추가 |
 | QoS | 0 | 현재 구현 기준. 센서 데이터는 주기적이므로 유실 허용 |
@@ -25,51 +25,35 @@ hub_id = ESP32 WiFi MAC 주소, 콜론 제거 소문자 (예: `aabbccddeeff`).
 
 ## Report payload (허브 → 서버)
 
+BLE notify 수신 시마다 해당 노드 1건의 데이터를 즉시 전송. 배열 없는 플랫 구조.
+
 ```json
 {
+  "node_id": "aa:bb:cc:dd:ee:01",
+  "node_type": "sensor",
+  "temperature": 26.3,
+  "humidity": 55.2,
+  "lux": null,
+  "battery_voltage": 2.85,
+  "ble_rssi": -62,
   "wifi_rssi": -45,
   "free_heap": 180000,
-  "uptime_ms": 360000,
-  "co2": null,
-  "hub_temperature": null,
-  "hub_humidity": null,
-  "connected_devices": [
-    { "node_id": "aa:bb:cc:dd:ee:01", "node_type": "sensor", "battery_voltage": 2.85, "rssi": -62 }
-  ],
-  "sensor_readings": [
-    { "node_id": "aa:bb:cc:dd:ee:01", "temperature": 26.3, "humidity": 55.2, "lux": null }
-  ]
+  "uptime_ms": 360000
 }
 ```
 
 | 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| `wifi_rssi` | int? | N | WiFi 신호세기 (dBm) |
-| `free_heap` | int? | N | ESP32 남은 힙 (바이트) |
-| `uptime_ms` | int? | N | 부팅 후 경과시간 (ms) |
-| `co2` | int? | N | SCD40 CO2 (ppm), Phase 6 |
-| `hub_temperature` | float? | N | SCD40 온도 (°C), Phase 6 |
-| `hub_humidity` | float? | N | SCD40 습도 (%), Phase 6 |
-| `connected_devices` | DeviceInfo[] | N | BLE 연결 디바이스 목록 |
-| `sensor_readings` | SensorReading[] | N | 센서노드 측정값 목록 |
-
-**DeviceInfo**
-
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `node_id` | string | Y | 노드 BLE MAC 주소 |
-| `node_type` | string | Y | `"sensor"` 또는 `"ir"` |
-| `battery_voltage` | float? | N | 배터리 전압 (V) |
-| `rssi` | int? | N | BLE RSSI (dBm) |
-
-**SensorReading**
-
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
 | `node_id` | string | Y | 센서노드 BLE MAC 주소 |
-| `temperature` | float | Y | 온도 (°C) |
-| `humidity` | float | Y | 습도 (%) |
-| `lux` | float? | N | 조도 (lux) |
+| `node_type` | string | Y | `"sensor"` 또는 `"ir"` |
+| `temperature` | float | N | 온도 (°C) |
+| `humidity` | float | N | 습도 (%) |
+| `lux` | int | N | 조도 raw ADC (0이면 생략) |
+| `battery_voltage` | float | N | 배터리 전압 (V) |
+| `ble_rssi` | int | N | BLE RSSI (dBm) |
+| `wifi_rssi` | int | N | 허브 WiFi 신호세기 (dBm) |
+| `free_heap` | int | N | ESP32 남은 힙 (바이트) |
+| `uptime_ms` | int | N | 허브 부팅 후 경과시간 (ms) |
 
 ## 데이터 흐름
 
