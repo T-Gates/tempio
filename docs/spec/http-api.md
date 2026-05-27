@@ -48,6 +48,21 @@ API 키 방식 (`X-API-Key` 헤더). 서버는 `hmac.compare_digest`로 검증.
 }
 ```
 
+### `POST /api/hub/{hub_id}/status`
+
+허브에 상태 조회 요청. 허브가 report 토픽으로 `hub_status` JSON을 회신.
+
+**Response `200 OK`**
+
+```json
+{
+  "status": "ok",
+  "detail": "HUB_STATUS command sent"
+}
+```
+
+허브 회신은 MQTT report 토픽으로 비동기 수신 (서버 로그에 출력).
+
 ## 조회
 
 ### `GET /`

@@ -77,11 +77,36 @@ Mosquitto (RPi, localhost:1883)
 | timings 의미 | IR LED on/off 교대 마이크로초. mark(on) → space(off) → mark → ... |
 | 노드 동작 | 38kHz PWM 캐리어 생성 + 타이밍대로 GPIO 토글 |
 
+### HUB_STATUS — 허브 상태 조회
+
+| 항목 | 값 |
+|------|-----|
+| type 문자열 | `"HUB_STATUS"` |
+| target | 빈 문자열 (허브 자체 명령) |
+| payload | 없음 (`{}`) |
+| 동작 | 허브가 상태 JSON을 report 토픽에 즉시 publish |
+
+**응답 payload** (report 토픽):
+
+```json
+{
+  "type": "hub_status",
+  "ble_connected": 2,
+  "pending_slots": 1,
+  "pending_commands": 3,
+  "free_heap": 180000,
+  "uptime_ms": 360000,
+  "mqtt_connected": true
+}
+```
+
+서버는 report 수신 시 `type == "hub_status"`이면 DB 저장하지 않고 로그만 남긴다.
+
 ## 규칙
 
 1. **type 문자열 매칭**: 서버 `constants.py`와 펌웨어 `cmd_dispatcher.cpp`의 문자열이 정확히 일치해야 함. 오타 시 `unknown cmd` 로그 출력 후 무시.
 2. **기본값**: payload에 필드가 없으면 ArduinoJson `|` 연산자로 기본값 적용 (파이썬 `dict.get(key, default)`).
 3. **한 번에 여러 명령**: `commands` 배열에 여러 명령 가능. 큐(`CMD_QUEUE_MAX=8`)에 순서대로 적재, loop에서 하나씩 처리.
 4. **큐 만석**: 큐가 다 차면 새 명령 버림 (오래된 명령 우선 처리).
-5. **대상 미연결**: `ble_send_to_node()`가 false 반환 → 시리얼 "fail" 로그. 재시도 없음.
+5. **대상 미연결**: `ble_send_to_node()` 실패 → PendingPool에 보관 (노드당 최대 4개). `flush_all_pending()`이 매 loop에서 재시도. TTL 5분 초과 시 자동 폐기.
 6. **분할 메시지**: MQTT 메시지가 버퍼(1024B)를 초과하면 무시 (`data_len != total_data_len` 체크).

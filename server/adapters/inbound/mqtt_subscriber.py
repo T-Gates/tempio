@@ -41,6 +41,11 @@ class MqttSubscriber:
                             data: dict = json.loads(
                                 message.payload.decode()
                             )
+
+                            if data.get("type") == "hub_status":
+                                logger.info("hub_status from %s: %s", hub_id, data)
+                                continue
+
                             report = SensorReport.from_mqtt_payload(hub_id, data)
 
                             if self._callback:
