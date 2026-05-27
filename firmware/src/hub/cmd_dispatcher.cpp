@@ -69,6 +69,12 @@ static bool handleIrTiming(const MqttCommand& cmd) {
     return ok;
 }
 
+// target이 비어있는 명령 = 허브 자체 명령
+static void handleHubCommand(const MqttCommand& cmd) {
+    if (strcmp(cmd.type, "HUB_STATUS") == 0) handleHubStatus();
+    else Serial.printf("<< unknown hub cmd: %s\n", cmd.type);
+}
+
 static void handleHubStatus() {
     char json[256];
     JsonDocument doc;
@@ -97,8 +103,7 @@ static bool trySend(const MqttCommand& cmd) {
 // ══════════════════════════════════════════════════════════════════════
 
 void dispatch_command(const MqttCommand& cmd) {
-    // 허브 자체 명령 — BLE 전송 아님
-    if (strcmp(cmd.type, "HUB_STATUS") == 0) { handleHubStatus(); return; }
+    if (cmd.target[0] == '\0') { handleHubCommand(cmd); return; }
 
     if (trySend(cmd)) return;
     pool.push(cmd.target, cmd);
