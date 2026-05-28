@@ -53,16 +53,17 @@ ESP32-C3 2대로 BLE Central↔Peripheral 연결 확인. 하드웨어 센서 없
 
 검증: E2E 관통 성공 ✅
 
-## Phase 5 — 서버→허브 명령 전달 E2E
+## Phase 5 — 서버→허브 명령 전달 E2E ✅
 
 서버에서 MQTT 명령 → 허브 수신 → BLE로 노드에 전달하는 하향 경로 구현 및 검증.
 
-- [ ] main.cpp에서 MQTT 명령 큐 처리 → BLE 바이너리 변환 → 노드 전달
-- [ ] SET_INTERVAL 명령 E2E 테스트 (서버 API → MQTT → 허브 → BLE → 센서노드)
+- [x] main.cpp에서 MQTT 명령 큐 처리 → BLE 바이너리 변환 → 노드 전달
+- [x] SET_INTERVAL 명령 E2E 테스트 (서버 API → MQTT → 허브 → BLE → 센서노드)
+- [x] TEST_CMD 명령 E2E 테스트 (서버 → 허브 → 센서노드 → ACK → 서버 DB)
 - [ ] RESET_NODE 명령 E2E 테스트
 - [ ] 명령 전달 지연 측정 (서버 publish → 허브 수신까지)
 
-검증: 서버 API 호출 → 시리얼 모니터에서 명령 수신 확인
+검증: TEST_CMD 핑퐁으로 전 구간 관통 확인 ✅, 대시보드에서 명령 전송/이력 조회 가능
 
 ## Phase 6 — 허브 SCD40 (CO2)
 
@@ -104,6 +105,8 @@ IR노드(ESP32-C3) BLE Peripheral + IR 발사.
 - [ ] 허브 1 + 센서노드 2 + IR노드 1 동시 운영
 - [ ] 서버에서 IR 명령 → 허브 → IR노드 → 에어컨 동작 E2E
 - [ ] 24시간 안정성 테스트 (연결 끊김, 재연결, 메모리 누수)
+- [ ] BLE 연결 타이밍 실측 (wake → connect → 전송 → disconnect 각 구간 millis 로그)
+- [ ] 실측 기반 타임아웃 최적화 (현재 매직넘버 5000/3000ms → 실측값 + 마진)
 - [ ] 배터리 수명 실측 시작
 
 ---

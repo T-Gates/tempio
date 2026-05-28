@@ -65,12 +65,15 @@ AA 건전지 구동. IR 명령 대기.
 [wake-up]
   BLE peripheral 광고
   허브 연결 대기
-  명령 있음 → IR 타이밍 수신 → 38kHz PWM + GPIO로 IR 발사
+  명령 있음 → IR_SEND 수신 → NVS 프로토콜 기반 IRremoteESP8266 send()
+              (또는 IR_TIMING 수신 → raw 타이밍 재생)
   명령 없음 → 배터리 전압만 보고
   BLE 해제 → 딥슬립
 ```
 
-IR 발사: `ledcWrite`로 38kHz 캐리어 생성, 타이밍 배열대로 on/off 토글.
+IR 발사: NVS에 저장된 에어컨 프로토콜(decode_type)에 따라 IRremoteESP8266 해당 클래스(IRSamsungAc, IRLgAc 등)로 상태 설정 후 send(). 38kHz 캐리어 생성·프로토콜 타이밍은 라이브러리가 처리.
+
+프로토콜 설정: 매장 설치 시 IR 수신기(TSOP38238)로 리모컨 신호 1회 수신 → 자동 감지 → NVS 저장.
 
 ## 라이브러리
 

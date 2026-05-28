@@ -34,6 +34,7 @@ Mosquitto (RPi, localhost:1883)
 {
   "commands": [
     { "target": "aa:bb:cc:dd:ee:01", "type": "SET_INTERVAL", "payload": { "interval_sec": 1800 } },
+    { "target": "aa:bb:cc:dd:ee:02", "type": "IR_SEND", "payload": { "power": true, "temp": 24, "mode": 1, "fan": 0, "swing": false } },
     { "target": "aa:bb:cc:dd:ee:02", "type": "IR_TIMING", "payload": { "timings": [4500, 4500, 560, 1690] } },
     { "target": "aa:bb:cc:dd:ee:01", "type": "RESET_NODE", "payload": { "level": 0 } }
   ]
@@ -65,17 +66,40 @@ Mosquitto (RPi, localhost:1883)
 | 대상 | 모든 노드 |
 | level 의미 | 0=재부팅, 1=페어링 삭제, 2=공장 초기화 |
 
-### IR_TIMING — IR 신호 발사
+### IR_SEND — 에어컨 제어 (기본 경로)
+
+| 항목 | 값 |
+|------|-----|
+| type 문자열 | `"IR_SEND"` |
+| payload | `{"power": true, "temp": 24, "mode": 1, "fan": 0, "swing": false}` |
+| BLE 패킷 | `IrSend` 구조체 (8바이트): `[0x03, cmd_id(2B LE), power, temp, mode, fan, swing]` |
+| 대상 | IR노드 |
+| 노드 동작 | NVS에서 프로토콜 읽기 → IRremoteESP8266 해당 클래스로 상태 설정 → send() |
+
+**payload 필드:**
+
+| 필드 | 타입 | 기본값 | 설명 |
+|------|------|--------|------|
+| power | bool | 필수 | true=ON, false=OFF. OFF일 때 나머지 필드 무시 |
+| temp | uint8 | 24 | 설정 온도 (16~30) |
+| mode | uint8 | 1 | 0=자동(auto), 1=냉방(cool), 2=난방(heat), 3=제습(dry), 4=송풍(fan) |
+| fan | uint8 | 0 | 0=자동(auto), 1=약풍(low), 2=중풍(med), 3=강풍(high) |
+| swing | bool | false | 스윙 ON/OFF |
+
+mode·fan 값은 브랜드 무관 추상 값. IR노드의 AcController 구현체가 브랜드별 상수로 변환.
+
+### IR_TIMING — IR 신호 발사 (raw fallback)
 
 | 항목 | 값 |
 |------|-----|
 | type 문자열 | `"IR_TIMING"` |
 | payload | `{"timings": [9000, 4500, 560, 1690, ...]}` |
-| BLE 패킷 | 가변 길이: `[0x02, count(2B LE), timing값들(count×2B LE)]` |
+| BLE 패킷 | 가변 길이: `[0x02, cmd_id(2B LE), count(2B LE), timing값들(count×2B LE)]` |
 | 크기 제한 | 500바이트 (BLE MTU 512 - 여유분). 초과 시 거부 + 시리얼 로그 |
 | 대상 | IR노드 |
 | timings 의미 | IR LED on/off 교대 마이크로초. mark(on) → space(off) → mark → ... |
 | 노드 동작 | 38kHz PWM 캐리어 생성 + 타이밍대로 GPIO 토글 |
+| 용도 | IRremoteESP8266 미지원 프로토콜 대비 raw fallback |
 
 ### HUB_STATUS — 허브 상태 조회
 

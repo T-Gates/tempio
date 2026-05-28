@@ -43,7 +43,8 @@ ESP32 기본 BLE 스택(Bluedroid)은 메모리를 ~350KB 먹는다. NimBLE은 ~
 | 코드 | 이름 | 방향 | 특성 | 설명 |
 |------|------|------|------|------|
 | `0x01` | SENSOR_DATA | 센서노드 → 허브 | DATA (notify) | 온습도 + 조도 + 배터리 |
-| `0x02` | IR_TIMING | 허브 → IR노드 | DATA (write) | raw IR 타이밍 배열 |
+| `0x02` | IR_TIMING | 허브 → IR노드 | DATA (write) | raw IR 타이밍 배열 (fallback) |
+| `0x03` | IR_SEND | 허브 → IR노드 | DATA (write) | 에어컨 제어 고수준 명령 |
 | `0x10` | HUB_READY | 허브 → 노드 | CONFIG | subscribe 완료 신호 ("데이터 보내도 돼") |
 | `0x12` | SET_INTERVAL | 허브 → 센서노드 | CONFIG | 측정 주기 변경 (초) |
 | `0x13` | RESET_NODE | 허브 → 노드 | CONFIG | 리셋 (레벨별) |
@@ -85,6 +86,20 @@ ESP32 기본 BLE 스택(Bluedroid)은 메모리를 ~350KB 먹는다. NimBLE은 ~
 
 예: 삼성 냉방 26도 → count=199, 총 401바이트.
 
+**IrSend (8바이트)** — 에어컨 제어 (기본 경로)
+
+| 오프셋 | 크기 | 필드 | 설명 |
+|--------|------|------|------|
+| 0 | 1 | type | `0x03` |
+| 1 | 2 | cmd_id | 서버 명령 ID (ACK에서 에코) |
+| 3 | 1 | power | 1=ON, 0=OFF |
+| 4 | 1 | temp | 설정 온도 (16~30) |
+| 5 | 1 | mode | 0=자동, 1=냉방, 2=난방, 3=제습, 4=송풍 |
+| 6 | 1 | fan | 0=자동, 1=약풍, 2=중풍, 3=강풍 |
+| 7 | 1 | swing | 1=ON, 0=OFF |
+
+IR노드는 NVS에 저장된 프로토콜(decode_type)에 따라 IRremoteESP8266 해당 클래스(IRSamsungAc, IRLgAc 등)로 상태 설정 후 send(). 브랜드별 모드·팬 상수 변환은 AcController 구현체가 처리.
+
 **HubReady (1바이트)**: `[0x10]` — 허브가 서비스 탐색 + DATA 구독 완료 후 전송. 노드는 이걸 받으면 NODE_INFO를 보내도 안전.
 **SetInterval (3바이트)**: `[0x12, interval_sec(2)]` — 기본 60초, 범위 10~3600
 **ResetNode (2바이트)**: `[0x13, level]` — 0=재부팅, 1=페어링 삭제, 2=공장 초기화
@@ -111,5 +126,5 @@ Central(허브) 측에서 `NimBLEDevice::setMTU(512)` 호출.
 
 1. 노드 wake-up → BLE 광고 (TEMPIO_SERVICE_UUID)
 2. 허브 연결 → MTU 협상(512) → HUB_READY 전송
-3. 노드: NODE_INFO → SensorData notify (센서노드), 또는 IR_TIMING 수신 대기 (IR노드)
+3. 노드: NODE_INFO → SensorData notify (센서노드), 또는 IR_SEND/IR_TIMING 수신 대기 (IR노드)
 4. 연결 해제 → 노드 딥슬립
