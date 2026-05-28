@@ -1,6 +1,6 @@
 // MQTT 명령 → BLE 패킷 변환·전달
 //
-// 역할: JSON payload를 바이너리 구조체로 변환해서 ble_send_to_node() 호출.
+// 역할: JSON payload를 바이너리 구조체로 변환해서 bleSendToNode() 호출.
 // 즉시 전송 실패 시 PendingPool에 보관, 나중에 flush로 재시도.
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -23,7 +23,7 @@ static bool handleSetInterval(const MqttCommand& cmd) {
     SetInterval pkt;
     pkt.cmd_id = cmd.cmd_id;
     pkt.interval_sec = doc["interval_sec"] | 60;
-    bool ok = ble_send_to_node(cmd.target, &pkt, sizeof(pkt));
+    bool ok = bleSendToNode(cmd.target, &pkt, sizeof(pkt));
     Serial.printf("<< SET_INTERVAL → %s : %us (%s)\n",
                   cmd.target, pkt.interval_sec, ok ? "ok" : "fail");
     return ok;
@@ -37,7 +37,7 @@ static bool handleResetNode(const MqttCommand& cmd) {
     ResetNode pkt;
     pkt.cmd_id = cmd.cmd_id;
     pkt.level = doc["level"] | 0;
-    bool ok = ble_send_to_node(cmd.target, &pkt, sizeof(pkt));
+    bool ok = bleSendToNode(cmd.target, &pkt, sizeof(pkt));
     Serial.printf("<< RESET_NODE → %s : level=%u (%s)\n",
                   cmd.target, pkt.level, ok ? "ok" : "fail");
     return ok;
@@ -53,13 +53,14 @@ static bool handleIrTiming(const MqttCommand& cmd) {
 
     uint16_t count = timings.size();
     size_t pktLen = 1 + 2 + 2 + count * 2;  // type(1) + cmd_id(2) + count(2) + timings
-    if (pktLen > 500) {
+    if (pktLen > BLE_MAX_WRITE_SIZE) {
         Serial.printf("<< IR_TIMING → %s : too large (%u bytes)\n",
                       cmd.target, pktLen);
         return false;
     }
-    auto* pkt = new uint8_t[pktLen];
-    if (!pkt) return false;
+    // 스택 배열 사용 — 위에서 BLE_MAX_WRITE_SIZE 초과 체크를 했으므로 안전
+    // heap 할당(new/delete)을 피해 메모리 단편화 방지
+    uint8_t pkt[BLE_MAX_WRITE_SIZE];
 
     pkt[0] = static_cast<uint8_t>(MsgType::IR_TIMING);
     memcpy(pkt + 1, &cmd.cmd_id, 2);
@@ -68,10 +69,9 @@ static bool handleIrTiming(const MqttCommand& cmd) {
         uint16_t val = timings[i];
         memcpy(pkt + 5 + i * 2, &val, 2);
     }
-    bool ok = ble_send_to_node(cmd.target, pkt, pktLen);
+    bool ok = bleSendToNode(cmd.target, pkt, pktLen);
     Serial.printf("<< IR_TIMING → %s : %u pulses (%s)\n",
                   cmd.target, count, ok ? "ok" : "fail");
-    delete[] pkt;
     return ok;
 }
 
@@ -89,8 +89,8 @@ static bool trySend(const MqttCommand& cmd) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 명령 진입점: target 비어있으면 허브 자체 명령, 아니면 노드로 전송 시도 → 실패 시 펜딩
-void dispatch_command(const MqttCommand& cmd) {
-    if (cmd.target[0] == '\0') { handle_hub_command(cmd); return; }
+void dispatchCommand(const MqttCommand& cmd) {
+    if (cmd.target[0] == '\0') { handleHubCommand(cmd); return; }
 
     if (trySend(cmd)) return;
     pool.push(cmd.target, cmd);
@@ -98,7 +98,7 @@ void dispatch_command(const MqttCommand& cmd) {
 }
 
 // 특정 노드의 펜딩 큐에서 명령을 꺼내 전송. 실패하면 다시 넣고 중단.
-void flush_node_pending(const char* nodeAddr) {
+void flushNodePending(const char* nodeAddr) {
     MqttCommand cmd;
     while (pool.pop(nodeAddr, &cmd)) {
         if (!trySend(cmd)) {
@@ -109,13 +109,13 @@ void flush_node_pending(const char* nodeAddr) {
 }
 
 // 모든 노드의 펜딩 큐 순회하며 전송 시도. loop()에서 매 틱 호출.
-void flush_all_pending() {
+void flushAllPending() {
     int idx = 0;
     char nodeId[18];
     while (pool.nextNode(&idx, nodeId, sizeof(nodeId))) {
-        flush_node_pending(nodeId);
+        flushNodePending(nodeId);
     }
 }
 
-int pending_active_slots() { return pool.activeSlots(); }
-int pending_total_commands() { return pool.totalPending(); }
+int pendingActiveSlots() { return pool.activeSlots(); }
+int pendingTotalCommands() { return pool.totalPending(); }

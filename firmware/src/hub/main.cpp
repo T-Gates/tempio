@@ -11,36 +11,36 @@
 #include "cmd/cmd_dispatcher.h"
 
 void setup() {
-    delay(3000);
+    delay(BOOT_DELAY_MS);
     Serial.begin(115200);
-    while (!Serial && millis() < 6000) { delay(10); }
+    while (!Serial && millis() < SERIAL_TIMEOUT_MS) { delay(10); }
 
-    wifi_init();
-    ble_central_init();
-    mqtt_init(MQTT_BROKER_URI);
+    wifiInit();
+    bleCentralInit();
+    mqttInit(MQTT_BROKER_URI);
 }
 
 void loop() {
-    wifi_process_serial();  // 시리얼로 WiFi 설정 변경 감시
-    ble_central_loop();     // BLE 스캔·연결·정리
-    mqtt_loop();            // WiFi 상태에 따라 MQTT 시작/중지
+    wifiProcessSerial();    // 시리얼로 WiFi 설정 변경 감시
+    bleCentralLoop();       // BLE 스캔·연결·정리
+    mqttLoop();             // WiFi 상태에 따라 MQTT 시작/중지
 
     // BLE로 들어온 센서 리포트를 MQTT로 서버에 전달
     SensorReport report;
-    while (ble_get_pending_report(&report)) {
+    while (bleGetPendingReport(&report)) {
         // 허브 자체 상태를 리포트에 주입 (노드는 WiFi/힙 정보를 모름)
         report.wifi_rssi  = WiFi.RSSI();
         report.free_heap  = ESP.getFreeHeap();
         report.uptime_ms  = millis();
 
-        char json[512];
+        char json[REPORT_JSON_BUF_SIZE];
         report.toJson(json, sizeof(json));
-        mqtt_publish_report(json);
+        mqttPublishReport(json);
         Serial.printf(">> MQTT published: %s\n", report.node_id);
     }
 
     // 연결된 노드 중 펜딩 명령이 있으면 전송 시도 (TTL 만료 명령도 여기서 정리)
-    flush_all_pending();
+    flushAllPending();
 
     delay(LOOP_DELAY_MS);
 }

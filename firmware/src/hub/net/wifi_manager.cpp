@@ -48,7 +48,7 @@ static void connect_wifi() {
 }
 
 // 부팅 시 NVS에서 크레덴셜 로드 → 있으면 자동 연결
-void wifi_init() {
+void wifiInit() {
     load_credentials();
     if (ssid.length() == 0) {
         Serial.println("No WiFi configured, use: wifi set SSID PW");
@@ -57,14 +57,14 @@ void wifi_init() {
     connect_wifi();
 }
 
-bool wifi_is_connected() {
+bool wifiIsConnected() {
     return WiFi.status() == WL_CONNECTED;
 }
 
 // 시리얼 명령 파서 — loop()에서 매 틱 호출
 // "wifi set SSID PW" → 크레덴셜 저장 + 즉시 연결
 // "wifi status" → 현재 연결 상태 출력
-void wifi_process_serial() {
+void wifiProcessSerial() {
     if (!Serial.available()) return;
 
     String line = Serial.readStringUntil('\n');
@@ -83,7 +83,7 @@ void wifi_process_serial() {
         Serial.printf("WiFi credentials saved: %s\n", newSsid.c_str());
         connect_wifi();
     } else if (line == "wifi status") {
-        if (wifi_is_connected()) {
+        if (wifiIsConnected()) {
             Serial.printf("WiFi connected, IP: %s, RSSI: %d\n",
                           WiFi.localIP().toString().c_str(), WiFi.RSSI());
         } else {

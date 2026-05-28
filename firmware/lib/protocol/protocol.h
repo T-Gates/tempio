@@ -14,9 +14,9 @@
 // ──────────── BLE UUID ────────────
 // 128-bit UUID. 앞 8자리 "4c544d50" = ASCII "LTMP" (tempio).
 // 두 번째 그룹(0001/0002/0003)으로 서비스·특성을 구분한다.
-#define TEMPIO_SERVICE_UUID        "4c544d50-0001-4654-b726-a8e800000000"  // 서비스
-#define TEMPIO_CHAR_DATA_UUID      "4c544d50-0002-4654-b726-a8e800000000"  // 데이터 교환 (notify + write)
-#define TEMPIO_CHAR_CONFIG_UUID    "4c544d50-0003-4654-b726-a8e800000000"  // 설정 명령 (write only)
+constexpr const char* TEMPIO_SERVICE_UUID     = "4c544d50-0001-4654-b726-a8e800000000";  // 서비스
+constexpr const char* TEMPIO_CHAR_DATA_UUID   = "4c544d50-0002-4654-b726-a8e800000000";  // 데이터 교환 (notify + write)
+constexpr const char* TEMPIO_CHAR_CONFIG_UUID = "4c544d50-0003-4654-b726-a8e800000000";  // 설정 명령 (write only)
 
 // ──────────── 메시지 타입 ────────────
 // 0x01~0x0F: 데이터 (DATA 특성으로 전송)

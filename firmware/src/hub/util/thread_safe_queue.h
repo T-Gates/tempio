@@ -74,6 +74,49 @@ public:
         return f;
     }
 
+    // 조건에 맞는 아이템이 큐에 있는지 확인 (꺼내지 않음)
+    // 파이썬 비유: any(pred(item) for item in queue)
+    template <typename Pred>
+    bool contains(Pred pred) const {
+        portENTER_CRITICAL(&mux_);
+        for (int i = 0; i < count_; i++) {
+            if (pred(buf_[(head_ + i) % N])) {
+                portEXIT_CRITICAL(&mux_);
+                return true;
+            }
+        }
+        portEXIT_CRITICAL(&mux_);
+        return false;
+    }
+
+    // ── Unsafe 변형 — 호출자가 이미 외부 lock을 잡고 있을 때 사용 ──
+    // PendingPool처럼 상위 레벨에서 lock을 잡고
+    // 여러 연산을 원자적으로 수행할 때 이중 lock을 피하기 위함
+
+    // lock 없이 push. 호출자가 lock 보장 필수.
+    bool pushUnsafe(const T& item) {
+        if (count_ >= N) return false;
+        buf_[tail_] = item;
+        tail_ = (tail_ + 1) % N;
+        count_++;
+        return true;
+    }
+
+    // lock 없이 아이템 수 조회. 호출자가 lock 보장 필수.
+    int countUnsafe() const { return count_; }
+
+    // lock 없이 비었는지 조회. 호출자가 lock 보장 필수.
+    bool emptyUnsafe() const { return count_ <= 0; }
+
+    // lock 없이 pop. 호출자가 lock 보장 필수.
+    bool popUnsafe(T* out) {
+        if (count_ <= 0) return false;
+        *out = buf_[head_];
+        head_ = (head_ + 1) % N;
+        count_--;
+        return true;
+    }
+
 private:
     T buf_[N];                  // 고정 크기 링 버퍼 (파이썬 list와 달리 힙 할당 없음)
     volatile int head_;         // 다음에 꺼낼 위치

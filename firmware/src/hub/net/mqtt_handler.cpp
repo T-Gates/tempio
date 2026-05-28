@@ -3,14 +3,14 @@
 // 이 파일의 역할:
 //   1. MQTT 브로커(Mosquitto)에 WSS로 연결하고, 끊기면 자동 재연결
 //   2. 센서 리포트를 서버에 publish (허브 → 서버)
-//   3. 서버에서 내려온 명령을 수신해서 dispatch_command()로 전달 (서버 → 허브)
+//   3. 서버에서 내려온 명령을 수신해서 dispatchCommand()로 전달 (서버 → 허브)
 //
 // esp_mqtt는 내부 FreeRTOS 태스크를 가지고 있어서,
 // 연결/수신/재연결을 알아서 처리한다. Arduino loop()에서는 WiFi 상태만 감시하면 됨.
 //
 // 명령 수신 흐름:
-//   esp_mqtt 태스크 → mqttEventHandler() → parseCommands() → dispatch_command()
-//   dispatch_command 내부에서 노드별 펜딩 큐로 관리됨 (cmd_dispatcher.cpp 참조)
+//   esp_mqtt 태스크 → mqttEventHandler() → parseCommands() → dispatchCommand()
+//   dispatchCommand 내부에서 노드별 펜딩 큐로 관리됨 (cmd_dispatcher.cpp 참조)
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -63,23 +63,24 @@ static esp_mqtt_client_handle_t client = nullptr;
 // 컴파일러가 최적화로 캐시하지 않게 강제
 static volatile bool connected = false;
 
-// 글로벌 명령 큐 없음 — 수신된 명령은 즉시 dispatch_command()로 전달.
-// dispatch_command() 내부에서 노드별 펜딩 큐로 관리됨 (cmd_dispatcher.cpp 참조).
+// 글로벌 명령 큐 없음 — 수신된 명령은 즉시 dispatchCommand()로 전달.
+// dispatchCommand() 내부에서 노드별 펜딩 큐로 관리됨 (cmd_dispatcher.cpp 참조).
 
 // WiFi MAC "AA:BB:CC:DD:EE:FF" → hub_id "aabbccddeeff"
 // 콜론 빼고 소문자로 변환해서 MQTT 토픽에 쓸 수 있는 형태로 만듦
 static void buildHubId() {
     String mac = WiFi.macAddress();
     int j = 0;
-    for (int i = 0; i < (int)mac.length() && j < 12; i++) {
+    // unsigned char 캐스팅: tolower는 unsigned char 범위만 보장 (C 표준)
+    for (int i = 0; i < static_cast<int>(mac.length()) && j < 12; i++) {
         if (mac[i] != ':') {
-            hubId[j++] = tolower(mac[i]);
+            hubId[j++] = static_cast<char>(tolower(static_cast<unsigned char>(mac[i])));
         }
     }
     hubId[j] = '\0';
 }
 
-// 서버에서 온 JSON을 파싱해서 dispatch_command()로 넘김
+// 서버에서 온 JSON을 파싱해서 dispatchCommand()로 넘김
 // esp_mqtt 내부 태스크에서 호출됨 — Arduino loop가 아닌 다른 태스크!
 //
 // 수신 JSON 예시:
@@ -111,12 +112,12 @@ static void parseCommands(const char* data, int len) {
         }
 
         // 글로벌 큐 없이 바로 디스패치 — 연결 안 된 노드면 내부에서 펜딩 큐에 보관됨
-        dispatch_command(cmd);
+        dispatchCommand(cmd);
     }
 }
 
 // MQTT 이벤트 핸들러 — esp_mqtt 내부 태스크에서 호출됨 (Arduino loop가 아님!)
-// mqtt_init()에서 register_event로 등록해둠.
+// mqttInit()에서 register_event로 등록해둠.
 // 파이썬으로 치면 client.on("*", mqtt_event_handler) 같은 콜백.
 static void mqttEventHandler(void* arg, esp_event_base_t base, int32_t event_id, void* event_data) {
     auto* event = static_cast<esp_mqtt_event_handle_t>(event_data);
@@ -160,7 +161,7 @@ static void mqttEventHandler(void* arg, esp_event_base_t base, int32_t event_id,
 // MQTT 클라이언트 초기화. setup()에서 한 번 호출.
 // 하는 일: hub_id 생성 → 토픽 조립 → esp_mqtt 클라이언트 생성 → 이벤트 핸들러 등록
 // WiFi가 이미 연결되어 있으면 즉시 브로커 접속 시작.
-void mqtt_init(const char* broker_uri) {
+void mqttInit(const char* broker_uri) {
     buildHubId();
     // snprintf = 파이썬의 f"tempio/{hub_id}/report". 버퍼 크기만큼만 안전하게 씀.
     snprintf(topicReport, sizeof(topicReport), "tempio/%s/report", hubId);
@@ -192,7 +193,7 @@ void mqtt_init(const char* broker_uri) {
 // WiFi 상태 변화 감시 — loop()에서 매 사이클 호출.
 // esp_mqtt가 통신은 알아서 하니까, 여기서는 WiFi 연결/끊김에 따라
 // MQTT 태스크를 시작/중지만 해주면 됨.
-void mqtt_loop() {
+void mqttLoop() {
     static bool wasConnected = false; // static: 호출 사이에 값이 유지됨 (이전 상태 기억)
     bool wifiNow = WiFi.isConnected();
 
@@ -205,14 +206,14 @@ void mqtt_loop() {
     wasConnected = wifiNow;
 }
 
-bool mqtt_is_connected() {
+bool mqttIsConnected() {
     return connected;
 }
 
 // 센서 리포트 JSON을 브로커에 publish.
 // main.cpp에서 BLE 데이터 수신할 때마다 호출됨.
 // 연결 안 되어 있으면 false 리턴하고 데이터는 유실됨 (재전송 안 함).
-bool mqtt_publish_report(const char* json) {
+bool mqttPublishReport(const char* json) {
     if (!connected) return false;
     // 마지막 세 인자: len=0(자동계산), qos=0, retain=0
     int msg_id = esp_mqtt_client_publish(client, topicReport, json, 0, 0, 0);
@@ -220,5 +221,5 @@ bool mqtt_publish_report(const char* json) {
 }
 
 // mqtt_get_command, mqtt_has_command 삭제됨
-// 명령은 parseCommands에서 직접 dispatch_command()로 전달.
+// 명령은 parseCommands에서 직접 dispatchCommand()로 전달.
 // 노드별 펜딩 큐는 cmd_dispatcher.cpp에서 관리.

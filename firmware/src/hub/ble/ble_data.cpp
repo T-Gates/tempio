@@ -5,7 +5,7 @@
 #include "ble_data.h"
 #include "../util/thread_safe_queue.h"
 
-// onDataNotify(NimBLE 태스크) → push, ble_get_pending_report(Arduino loop) → pop
+// onDataNotify(NimBLE 태스크) → push, bleGetPendingReport(Arduino loop) → pop
 static ThreadSafeQueue<SensorReport, REPORT_QUEUE_MAX> reportQueue;
 
 // notify를 보낸 특성 → 클라이언트 → 슬롯 인덱스 역추적
@@ -28,12 +28,11 @@ static void handleNodeInfo(int slot, const uint8_t* data, size_t len, const char
 // BLE 바이너리 → SensorReport DTO 변환 (허브 상태는 main.cpp에서 주입)
 static SensorReport buildReport(int slot, const SensorData& sd, const char* srcAddr) {
     SensorReport rpt;
-    strncpy(rpt.node_id, srcAddr, sizeof(rpt.node_id) - 1);
-    rpt.node_id[sizeof(rpt.node_id) - 1] = '\0';
+    // strlcpy는 항상 널 종단을 보장 — strncpy + 수동 '\0'보다 안전
+    strlcpy(rpt.node_id, srcAddr, sizeof(rpt.node_id));
     const char* typeStr = (slot >= 0 && nodes[slot].nodeType == NodeType::IR)
         ? "ir" : "sensor";
-    strncpy(rpt.node_type_str, typeStr, sizeof(rpt.node_type_str) - 1);
-    rpt.node_type_str[sizeof(rpt.node_type_str) - 1] = '\0';
+    strlcpy(rpt.node_type_str, typeStr, sizeof(rpt.node_type_str));
     rpt.temperature = sd.temp;
     rpt.humidity    = sd.humidity;
     rpt.ldr         = sd.ldr;
@@ -91,6 +90,6 @@ void onDataNotify(NimBLERemoteCharacteristic* c,
     }
 }
 
-bool ble_get_pending_report(SensorReport* out) {
+bool bleGetPendingReport(SensorReport* out) {
     return reportQueue.pop(out);
 }

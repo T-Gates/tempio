@@ -8,4 +8,4 @@ void onDataNotify(NimBLERemoteCharacteristic* c,
                   uint8_t* data, size_t len, bool isNotify);
 
 // 리포트 큐에서 하나 꺼냄. 비었으면 false.
-bool ble_get_pending_report(SensorReport* out);
+bool bleGetPendingReport(SensorReport* out);

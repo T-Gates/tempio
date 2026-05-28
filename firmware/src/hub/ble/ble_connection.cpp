@@ -4,18 +4,18 @@
 #include "ble_connection.h"
 #include "ble_data.h"
 #include "../cmd/cmd_dispatcher.h"
+#include "../util/thread_safe_queue.h"
 
 // ──────────── 연결 대기 큐 ────────────
 // 스캔에서 발견된 노드 주소를 여기 쌓아두고, processNextPending()에서 하나씩 연결
-static NimBLEAddress pendingAddrs[PENDING_MAX];
-static int pendingCount = 0;
+// 기존 pendingAddrs[] + pendingCount + 수동 시프트를 ThreadSafeQueue로 교체
+static ThreadSafeQueue<NimBLEAddress, PENDING_MAX> pendingQueue;
 
 // 이미 대기열에 있는 주소인지 중복 체크
 static bool isAlreadyPending(const NimBLEAddress& addr) {
-    for (int i = 0; i < pendingCount; i++) {
-        if (pendingAddrs[i] == addr) return true;
-    }
-    return false;
+    return pendingQueue.contains([&](const NimBLEAddress& a) {
+        return a == addr;
+    });
 }
 
 // ──────────── NimBLE 콜백 ────────────
@@ -28,11 +28,11 @@ class ScanCB : public NimBLEScanCallbacks {
         if (isAlreadyConnected(addr)) return;  // 이미 연결됨
         if (isAlreadyPending(addr))   return;  // 이미 대기열에 있음
         if (findEmptySlot() < 0)      return;  // 슬롯 풀
-        if (pendingCount >= PENDING_MAX) return;
+        if (pendingQueue.full())      return;  // 대기열 꽉 참
 
         Serial.printf("found: %s  rssi=%d\n",
                       addr.toString().c_str(), dev->getRSSI());
-        pendingAddrs[pendingCount++] = addr;
+        pendingQueue.push(addr);
     }
 };
 
@@ -103,7 +103,8 @@ static void registerNode(int slot, NimBLEClient* client,
     nodes[slot].addr       = addr;
     nodes[slot].used       = true;
 
-    delay(200);
+    // MTU 협상 완료 대기 — 이 딜레이 없이 write하면 BLE 스택이 불안정
+    delay(POST_CONNECT_DELAY_MS);
     HubReady ready;
     if (nodes[slot].configChar) {
         nodes[slot].configChar->writeValue(
@@ -113,7 +114,7 @@ static void registerNode(int slot, NimBLEClient* client,
     digitalWrite(LED_PIN, LED_ON);
 
     // 이 노드에 대기 중인 서버 명령이 있으면 지금 전송
-    flush_node_pending(addr.toString().c_str());
+    flushNodePending(addr.toString().c_str());
 }
 
 // 노드 연결 전체 흐름: 클라이언트 획득 → TCP 연결 → 서비스 탐색 → 슬롯 등록
@@ -139,7 +140,7 @@ static bool connectToNode(const NimBLEAddress& addr) {
 
 // ──────────── 공개 API ────────────
 
-void ble_connection_init(NimBLEScan* pScan) {
+void bleConnectionInit(NimBLEScan* pScan) {
     pScan->setScanCallbacks(&scanCb);
     pScan->setActiveScan(true);
     pScan->setInterval(BLE_SCAN_INTERVAL);
@@ -148,12 +149,8 @@ void ble_connection_init(NimBLEScan* pScan) {
 
 // 대기열 맨 앞 주소를 꺼내 연결 시도. 스캔 일시정지 → 연결 → 스캔 재개.
 void processNextPending() {
-    if (pendingCount == 0) return;
-    NimBLEAddress addr = pendingAddrs[0];
-    // 배열 앞에서 꺼내고 뒤를 한 칸씩 당김 (FIFO)
-    for (int i = 1; i < pendingCount; i++)
-        pendingAddrs[i - 1] = pendingAddrs[i];
-    pendingCount--;
+    NimBLEAddress addr;
+    if (!pendingQueue.pop(&addr)) return;  // 대기열 비었으면 즉시 리턴
 
     NimBLEDevice::getScan()->stop();
     connectToNode(addr);

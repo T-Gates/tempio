@@ -2,11 +2,11 @@
 #pragma once
 
 // NVS에서 SSID/PW 읽어서 WiFi 연결 시도. setup()에서 한 번 호출.
-void wifi_init();
+void wifiInit();
 
 // WiFi 연결 상태 반환.
-bool wifi_is_connected();
+bool wifiIsConnected();
 
 // 시리얼 입력에서 WiFi 명령 처리. loop()에서 호출.
 // "wifi set SSID PW" → NVS 저장 + 재연결, "wifi status" → 상태 출력.
-void wifi_process_serial();
+void wifiProcessSerial();
