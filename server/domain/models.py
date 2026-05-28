@@ -44,8 +44,9 @@ class SensorReportRecord(BaseModel):
 
 class Command(BaseModel):
     target: str       # 노드 MAC 주소
-    type: str         # "SET_INTERVAL", "IR_TIMING", "RESET_NODE"
-    payload: dict     # {"interval_sec": 1800} 등
+    type: str         # "SET_INTERVAL", "IR_TIMING", "RESET_NODE", "TEST"
+    payload: dict = {}
+    cmd_id: int = 0   # 서버가 자동 부여 (0이면 send_command에서 채움)
 
 
 class CommandEnvelope(BaseModel):

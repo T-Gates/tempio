@@ -52,3 +52,15 @@ async def request_hub_status(
 ):
     await service.send_command(hub_id, [Command(target="", type="HUB_STATUS", payload={})])
     return {"status": "ok", "detail": "HUB_STATUS command sent"}
+
+
+@router.post("/api/hub/{hub_id}/test", dependencies=[Depends(get_api_key_verifier)])
+async def send_test(
+    hub_id: str,
+    target: str,
+    led: bool = False,
+    service: SensorService = Depends(get_service),
+):
+    cmd = Command(target=target, type="TEST", payload={"led": led})
+    await service.send_command(hub_id, [cmd])
+    return {"status": "ok", "cmd_id": cmd.cmd_id, "target": target, "led": led}
