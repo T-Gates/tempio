@@ -24,6 +24,21 @@
         th { padding: 8px; text-align: left; font-size: 12px; color: #64748b; border-bottom: 1px solid #334155; }
         td { padding: 8px; font-size: 14px; border-bottom: 1px solid #1e293b; }
         .waiting { display: flex; justify-content: center; align-items: center; height: 80vh; font-size: 18px; color: #64748b; }
+        .cmd-panel { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
+        .cmd-panel label { font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px; }
+        .cmd-panel input, .cmd-panel select { background: #0f172a; border: 1px solid #334155; color: #e2e8f0; border-radius: 6px; padding: 8px 12px; font-size: 14px; }
+        .cmd-panel select { min-width: 140px; }
+        .cmd-panel input { min-width: 180px; }
+        .cmd-panel button { background: #3b82f6; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 14px; cursor: pointer; }
+        .cmd-panel button:hover { background: #2563eb; }
+        .cmd-panel button:disabled { background: #475569; cursor: not-allowed; }
+        .payload-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px; }
+        .payload-row input { background: #0f172a; border: 1px solid #334155; color: #e2e8f0; border-radius: 6px; padding: 8px 12px; font-size: 14px; flex: 1; min-width: 200px; }
+        .status-pending { color: #fbbf24; }
+        .status-success { color: #34d399; }
+        .status-fail { color: #f87171; }
+        .status-timeout { color: #64748b; }
+        .cmd-result { font-size: 13px; color: #94a3b8; margin-bottom: 12px; min-height: 20px; }
     </style>
 </head>
 <body>
@@ -77,6 +92,109 @@
     <div class="chart-container">
         <canvas id="tempChart" height="80"></canvas>
     </div>
+
+    <div class="section">
+        <h2>명령 전송</h2>
+        <div class="cmd-panel">
+            <div>
+                <label>대상 노드</label>
+                <select id="cmdTarget">
+                    {% for nid in sensors %}
+                    <option value="{{ nid }}">{{ nid[-8:] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>명령</label>
+                <select id="cmdType" onchange="updatePayloadHint()">
+                    <option value="TEST">TEST</option>
+                    <option value="SET_INTERVAL">SET_INTERVAL</option>
+                    <option value="RESET_NODE">RESET_NODE</option>
+                </select>
+            </div>
+            <button id="cmdSend" onclick="sendCommand()">전송</button>
+        </div>
+        <div class="payload-row">
+            <div style="flex:1">
+                <label style="font-size:12px;color:#94a3b8;margin-bottom:4px;display:block">payload (JSON)</label>
+                <input id="cmdPayload" type="text" placeholder='{"led": true}'>
+            </div>
+        </div>
+        <div class="cmd-result" id="cmdResult"></div>
+    </div>
+
+    <div class="section">
+        <h2>명령 이력</h2>
+        <table>
+            <tr><th>ID</th><th>대상</th><th>명령</th><th>상태</th><th>전송</th><th>ACK</th></tr>
+            {% for log in command_logs %}
+            <tr>
+                <td>{{ log.cmd_id }}</td>
+                <td>{{ log.target[-8:] if log.target else 'hub' }}</td>
+                <td>{{ log.type }}</td>
+                <td class="status-{{ log.status }}">{{ log.status }}</td>
+                <td>{% if log.created_at %}{{ log.created_at.split('T')[1][:8] if 'T' in log.created_at else log.created_at }}{% endif %}</td>
+                <td>{% if log.acked_at %}{{ log.acked_at.split('T')[1][:8] if 'T' in log.acked_at else '-' }}{% else %}-{% endif %}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" style="color:#64748b">명령 이력 없음</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <script>
+        const hubId = "{{ hub_id }}";
+        const apiKey = ""; // 필요 시 여기에 API 키 입력
+
+        function updatePayloadHint() {
+            const type = document.getElementById('cmdType').value;
+            const input = document.getElementById('cmdPayload');
+            const hints = {
+                'TEST': '{"led": true}',
+                'SET_INTERVAL': '{"interval_sec": 60}',
+                'RESET_NODE': '{"level": 0}',
+            };
+            input.placeholder = hints[type] || '{}';
+        }
+
+        async function sendCommand() {
+            const btn = document.getElementById('cmdSend');
+            const result = document.getElementById('cmdResult');
+            btn.disabled = true;
+
+            const target = document.getElementById('cmdTarget').value;
+            const type = document.getElementById('cmdType').value;
+            let payload = {};
+            try {
+                const raw = document.getElementById('cmdPayload').value.trim();
+                if (raw) payload = JSON.parse(raw);
+            } catch { result.textContent = 'payload JSON 파싱 실패'; btn.disabled = false; return; }
+
+            const headers = { 'Content-Type': 'application/json' };
+            if (apiKey) headers['X-API-Key'] = apiKey;
+
+            try {
+                const res = await fetch(`/api/hub/${hubId}/command`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify([{ target, type, payload }]),
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    result.textContent = `전송 완료 (${type} → ${target.slice(-8)})`;
+                    result.style.color = '#34d399';
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    result.textContent = `오류: ${data.detail || res.status}`;
+                    result.style.color = '#f87171';
+                }
+            } catch (e) {
+                result.textContent = `전송 실패: ${e.message}`;
+                result.style.color = '#f87171';
+            }
+            btn.disabled = false;
+        }
+    </script>
 
     <script>
         const sensorHistory = {{ sensor_history | tojson }};

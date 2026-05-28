@@ -19,13 +19,17 @@ def dashboard(request: Request, service: SensorService = Depends(get_service)):
     hub = service.get_latest_hub()
     sensors = service.get_latest_sensors()
     history = service.get_history(30)
+    hub_id = hub.hub_id if hub else ""
+    cmd_logs = service.get_command_logs(hub_id, 20) if hub_id else []
     return templates.TemplateResponse(
         request,
         "dashboard.html",
         context={
             "hub": hub,
+            "hub_id": hub_id,
             "sensors": sensors,
             "sensor_history": [r.model_dump() for r in history],
+            "command_logs": [log.model_dump() for log in cmd_logs],
         },
     )
 
