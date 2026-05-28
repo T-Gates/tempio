@@ -24,6 +24,7 @@ async def lifespan(app: FastAPI):
     service = SensorService(repo=repo, publisher=publisher)
 
     subscriber.on_report(service.process_report)
+    subscriber.on_ack(service.process_ack)
 
     app.state.service = service
     app.state.api_key = settings.api_key or None

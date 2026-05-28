@@ -1,6 +1,8 @@
+import json
 import threading
+from datetime import datetime
 
-from domain.models import SensorReport, Command, CommandEnvelope
+from domain.models import SensorReport, Command, CommandEnvelope, CommandLog
 from ports.repository import SensorRepository
 from ports.message_broker import CommandPublisher
 
@@ -26,6 +28,20 @@ class SensorService:
                 cmd.cmd_id = self._next_cmd_id()
         envelope = CommandEnvelope(hub_id=hub_id, commands=commands)
         await self.publisher.publish_commands(envelope)
+
+        now = datetime.now().isoformat()
+        for cmd in commands:
+            self.repo.save_command_log(CommandLog(
+                cmd_id=cmd.cmd_id, hub_id=hub_id, target=cmd.target,
+                type=cmd.type, payload=json.dumps(cmd.payload),
+                created_at=now,
+            ))
+
+    def process_ack(self, hub_id: str, cmd_id: int, success: bool):
+        self.repo.update_command_ack(hub_id, cmd_id, success)
+
+    def get_command_logs(self, hub_id: str, limit: int = 50):
+        return self.repo.get_command_logs(hub_id, limit)
 
     def get_history(self, limit: int = 100):
         return self.repo.get_reports(limit)

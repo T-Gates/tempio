@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional
 
-from domain.models import SensorReport, SensorReportRecord
+from domain.models import SensorReport, SensorReportRecord, CommandLog
 from ports.repository import SensorRepository
 
 
@@ -47,6 +47,21 @@ class SqliteRepository(SensorRepository):
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sr_node ON sensor_reports(node_id, id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sr_hub ON sensor_reports(hub_id)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS command_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cmd_id INTEGER NOT NULL,
+                    hub_id TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    payload TEXT DEFAULT '',
+                    status TEXT DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    acked_at TEXT
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cl_hub ON command_logs(hub_id, id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cl_ack ON command_logs(hub_id, cmd_id, status)")
 
     def save_report(self, report: SensorReport) -> None:
         ts = report.timestamp.isoformat() if report.timestamp else datetime.now().isoformat()
@@ -97,3 +112,31 @@ class SqliteRepository(SensorRepository):
                 ) latest ON s.id = latest.max_id
             """).fetchall()
         return {row["node_id"]: SensorReportRecord(**dict(row)) for row in rows}
+
+    def save_command_log(self, log: CommandLog) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO command_logs
+                   (cmd_id, hub_id, target, type, payload, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (log.cmd_id, log.hub_id, log.target, log.type,
+                 log.payload, log.status, log.created_at),
+            )
+
+    def update_command_ack(self, hub_id: str, cmd_id: int, success: bool) -> None:
+        status = "success" if success else "fail"
+        now = datetime.now().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE command_logs SET status = ?, acked_at = ?
+                   WHERE hub_id = ? AND cmd_id = ? AND status = 'pending'""",
+                (status, now, hub_id, cmd_id),
+            )
+
+    def get_command_logs(self, hub_id: str, limit: int = 50) -> list[CommandLog]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM command_logs WHERE hub_id = ? ORDER BY id DESC LIMIT ?",
+                (hub_id, limit),
+            ).fetchall()
+        return [CommandLog(**dict(row)) for row in rows]

@@ -52,3 +52,15 @@ class Command(BaseModel):
 class CommandEnvelope(BaseModel):
     hub_id: str
     commands: list[Command]
+
+
+class CommandLog(BaseModel):
+    id: Optional[int] = None
+    cmd_id: int
+    hub_id: str
+    target: str
+    type: str
+    payload: str = ""
+    status: str = "pending"  # pending / success / fail / timeout
+    created_at: Optional[str] = None
+    acked_at: Optional[str] = None

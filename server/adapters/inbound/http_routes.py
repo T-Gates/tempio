@@ -54,6 +54,15 @@ async def request_hub_status(
     return {"status": "ok", "detail": "HUB_STATUS command sent"}
 
 
+@router.get("/api/hub/{hub_id}/commands")
+def command_history(
+    hub_id: str,
+    limit: int = 50,
+    service: SensorService = Depends(get_service),
+):
+    return [log.model_dump() for log in service.get_command_logs(hub_id, limit)]
+
+
 @router.post("/api/hub/{hub_id}/test", dependencies=[Depends(get_api_key_verifier)])
 async def send_test(
     hub_id: str,
